@@ -1,0 +1,523 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(tidyr)
+library(tables)
+
+library(doParallel)
+all_cores <- parallel::detectCores(logical = FALSE)
+registerDoParallel(cores = all_cores)
+```
+
+# triage
+
+```{r}
+# Jul2020-Jul2021 65+
+ReferenceKeyWhitelist = stata %>% 
+  filter(age >= 65, 
+         eventdate >= as.Date("2020-07-01"), 
+         eventdate < as.Date("2021-07-01")) %>% 
+    select(ReferenceKey, DateofRegisteredDeath, eventdate, doadba, death, TriageCategory) %>%
+  group_by(ReferenceKey) %>%
+  arrange(eventdate) %>%
+  summarise(DateofRegisteredDeath = last(DateofRegisteredDeath),
+            TriageCategory = last(TriageCategory),
+            death = last(death),
+            doadba = last(doadba),
+            .groups="drop") 
+
+nrow(ReferenceKeyWhitelist)
+# format is "yyy-mm-dd"
+startdate = "2016-01-01"
+elderly_death_visit = stata %>% 
+  filter(year(eventdate) > 2015,
+         eventdate < as.Date("2020-07-01"),
+         eventdate >= as.Date(startdate)
+         ) %>%
+  filter(ReferenceKey %in% (ReferenceKeyWhitelist %>% pull(ReferenceKey))) 
+
+df = elderly_death_visit %>% 
+  select(ReferenceKey, eventdate) %>%
+  mutate(period = ifelse(eventdate >= as.Date("2020-01-25"), "covid", "non-covid"))
+
+df2 = df %>% 
+  group_by(ReferenceKey, period) %>%
+  summarise(visits = n()) %>%
+  ungroup() %>% 
+  # complete combinations of referencekey and period
+  complete(ReferenceKey, period) %>%
+  group_by(ReferenceKey) %>%
+  summarise(covid = visits[period == "covid"],
+            `non-covid` = visits[period == "non-covid"]) %>%
+  replace_na(list(covid = 0, `non-covid` = 0)) %>%
+  ungroup()
+
+
+df3 = df2 %>%
+  left_join(ReferenceKeyWhitelist, by=c("ReferenceKey")) %>%
+  mutate(DateofRegisteredDeath = ifelse(is.na(DateofRegisteredDeath), "2021-07-01", DateofRegisteredDeath),
+         covidIR = covid / as.numeric(difftime("2020-07-01","2020-01-25")),
+         noncovidIR = `non-covid` / as.numeric(difftime("2020-01-24",startdate)),
+         deltaIR = covidIR - noncovidIR)  %>% 
+  mutate(change = ifelse(deltaIR < 0, "reduce", "increase"),
+         change = ifelse(deltaIR == 0, "nochange", change),
+         status = "survived",
+         status = ifelse(death==1, "28d_death", status),
+         status = ifelse(doadba==1, "doadba", status),
+         ) %>%
+  filter(`non-covid` > 8)
+
+table(df3$change, df3$status, df3$TriageCategory)
+
+ylims <- df3 %>%
+  mutate(deltaIR =  deltaIR * 100) %>%
+  group_by(status, TriageCategory) %>%
+  summarise(Q1 = quantile(deltaIR, 1/4), Q3 = quantile(deltaIR, 3/4)) %>%
+  ungroup() %>%
+  #get lowest Q1 and highest Q3
+  summarise(lowQ1 = min(Q1), highQ3 = max(Q3))
+
+# cumulative plot
+ggplot(data = df3%>% filter(!is.na(status), TriageCategory == 1), aes(x = deltaIR * 100, col = status))+
+  geom_step(aes(y=..y..),stat="ecdf") +
+  xlim(ylims$lowQ1, ylims$highQ3) +
+  ylab("Cumulative portion") +
+  xlab("Visit change per 100 days in covid period, against pre-covid period") 
+  # facet_wrap(~old_home, labeller = labeller(old_home = labels)) 
+  
+```
+
+# DOA/DBA
+
+```{r}
+# Jul2020-Jul2021 65+
+ReferenceKeyWhitelist = stata %>% 
+  filter(age >= 65, 
+         eventdate >= as.Date("2020-07-01"), 
+         eventdate < as.Date("2021-07-01"),
+         doadba == 1) %>% 
+    select(ReferenceKey, DateofRegisteredDeath, eventdate, TriageCategory) %>%
+  group_by(ReferenceKey) %>%
+  arrange(eventdate) %>%
+  summarise(DateofRegisteredDeath = last(DateofRegisteredDeath),
+            TriageCategory = last(TriageCategory),
+            .groups="drop") 
+
+nrow(ReferenceKeyWhitelist)
+# format is "yyy-mm-dd"
+startdate = "2016-01-01"
+elderly_death_visit = stata %>% 
+  filter(year(eventdate) > 2015,
+         eventdate < as.Date("2020-07-01"),
+         eventdate >= as.Date(startdate)
+         ) %>%
+  filter(ReferenceKey %in% (ReferenceKeyWhitelist %>% pull(ReferenceKey))) 
+
+df = elderly_death_visit %>% 
+  select(ReferenceKey, eventdate) %>%
+  mutate(period = ifelse(eventdate >= as.Date("2020-01-25"), "covid", "non-covid"))
+
+df2 = df %>% 
+  group_by(ReferenceKey, period) %>%
+  summarise(visits = n()) %>%
+  ungroup() %>% 
+  # complete combinations of referencekey and period
+  complete(ReferenceKey, period) %>%
+  group_by(ReferenceKey) %>%
+  summarise(covid = visits[period == "covid"],
+            `non-covid` = visits[period == "non-covid"]) %>%
+  replace_na(list(covid = 0, `non-covid` = 0)) %>%
+  ungroup()
+
+
+df3 = df2 %>%
+  left_join(ReferenceKeyWhitelist, by=c("ReferenceKey")) %>%
+  mutate(DateofRegisteredDeath = ifelse(is.na(DateofRegisteredDeath), "2021-07-01", DateofRegisteredDeath),
+         covidIR = covid / as.numeric(difftime("2020-07-01","2020-01-25")),
+         noncovidIR = `non-covid` / as.numeric(difftime("2020-01-24",startdate)),
+         deltaIR = covidIR - noncovidIR)  %>% 
+  mutate(change = ifelse(deltaIR < 0, "reduce", "increase"),
+         change = ifelse(deltaIR == 0, "nochange", change),
+         )
+
+table(df3$change,df3$TriageCategory)
+chisq.test(df3$change, df3$old_home, correct = 1)
+```
+
+# DOA/DBA in covid and pre-covid
+
+```{r}
+ReferenceKeyWhitelist1 = stata %>% 
+  filter(age >= 65, doadba == 1, eventdate >= "2018-07-01", eventdate < "2019-07-01") %>%
+  select(ReferenceKey, DateofRegisteredDeath, eventdate, old_home) %>%
+  group_by(ReferenceKey) %>%
+  arrange(eventdate) %>%
+  summarise(DateofRegisteredDeath = last(DateofRegisteredDeath),
+            old_home = last(old_home),
+            .groups="drop") 
+
+ReferenceKeyWhitelist2 = stata %>% 
+  filter(age >= 65, doadba == 1, eventdate >= "2020-07-01", eventdate < "2021-07-01") %>%
+  select(ReferenceKey, DateofRegisteredDeath, eventdate, old_home) %>%
+  group_by(ReferenceKey) %>%
+  arrange(eventdate) %>%
+  summarise(DateofRegisteredDeath = last(DateofRegisteredDeath),
+            old_home = last(old_home),
+            .groups="drop") 
+
+trace_visits = function(ReferenceKeyWhitelist, 
+                        startctrldate = "2019-01-01", 
+                        endtrtdate = "2020-07-01", 
+                        enddate = "2021-07-01",
+                        minnoncovidvisits = 8, 
+                        starttrtdate = "2020-01-25"){
+  # format is "yyy-mm-dd"
+  elderly_death_visit = stata %>% 
+    filter(year(eventdate) > 2015,
+           eventdate < as.Date(endtrtdate),
+           eventdate >= as.Date(startctrldate)
+           ) %>%
+    filter(ReferenceKey %in% (ReferenceKeyWhitelist %>% pull(ReferenceKey))) 
+  
+  df = elderly_death_visit %>% 
+    select(ReferenceKey, eventdate) %>%
+    mutate(period = ifelse(eventdate >= as.Date(starttrtdate), "covid", "non-covid"))
+  
+  df2 = df %>% 
+    group_by(ReferenceKey, period) %>%
+    summarise(visits = n()) %>%
+    ungroup() %>% 
+    # complete combinations of referencekey and period
+    complete(ReferenceKey, period) %>%
+    group_by(ReferenceKey) %>%
+    summarise(covid = visits[period == "covid"],
+              `non-covid` = visits[period == "non-covid"]) %>%
+    replace_na(list(covid = 0, `non-covid` = 0)) %>%
+    # remove patients who did not visit AE once pre-covid
+    filter(`non-covid` > minnoncovidvisits) %>%
+    ungroup()
+  
+  df3 = df2 %>%
+    left_join(ReferenceKeyWhitelist, by=c("ReferenceKey")) %>%
+    mutate(
+      # probly useless
+      DateofRegisteredDeath = ifelse(is.na(DateofRegisteredDeath), enddate, DateofRegisteredDeath),
+           covidIR = covid / as.numeric(difftime(endtrtdate, starttrtdate)),
+           noncovidIR = `non-covid` / as.numeric(difftime(starttrtdate ,startctrldate)-1),
+           deltaIR = covidIR - noncovidIR,
+           IRR = covidIR / noncovidIR)  %>% 
+    mutate(change = ifelse(IRR < 1, "reduce", "increase"),
+           change = ifelse(IRR == 1, "no change", change),
+           change = ifelse(IRR == 0, "no visit", change),
+           )
+  df3
+}
+
+
+df.covid = trace_visits(ReferenceKeyWhitelist2, minnoncovidvisits = 2)
+df.precovid = trace_visits(ReferenceKeyWhitelist1, 
+                           startctrldate = "2017-01-01", 
+                           endtrtdate = "2018-07-01", 
+                           starttrtdate = "2018-01-01", 
+                           enddate = "2019-07-01",
+                           minnoncovidvisits = 2)
+
+table(df.covid$change, df.covid$old_home)
+table(df.precovid$change,  df.precovid$old_home)
+df = rbind(df.covid %>% mutate(period = "covid"),
+                df.precovid %>% mutate(period = "precovid")) 
+# chisq.test(df.covid$change, df.covid$old_home)
+# chisq.test(df.precovid$change, df.precovid$old_home)
+
+table(df[df$old_home=="N",]$period, 
+      df[df$old_home == "N",]$change)
+table(df[df$old_home=="Y",]$period,  
+      df[df$old_home == "Y",]$change)
+chisq.test(df[df$old_home=="N",]$period,
+           df[df$old_home == "N",]$change)
+
+chisq.test(df[df$old_home=="Y",]$period,
+           df[df$old_home == "Y",]$change)
+
+table(df$period,
+           df$change)
+
+chisq.test(df$period,
+           df$change)
+# # cumulative plot
+# ggplot()+
+#   geom_step(data = df.covid, aes(x = deltaIR * 100, y=..y..),stat="ecdf", col="red") +
+#   geom_step(data = df.precovid, aes(x = deltaIR * 100, y=..y..),stat="ecdf", col="black") +
+#   xlim(-3, 3) +
+#   ylab("Cumulative portion") +
+#   xlab("Attn rate (IR) change per 100 days in trt period, against ctrl period")
+  # xlab("Attn rate (IR) change per 100 days in 25Jan2020-30Jun2020, against prior 1Jan2019-24Jan2020")
+  # xlab("Attn rate (IR) change per 100 days in 1Jan2018-30Jun2018, against prior 1yr 1Jan2017-31Dec2017") 
+  # facet_wrap(~old_home, labeller = labeller(old_home = labels)) 
+library(ggpubr)
+my_comparisons <- list( c("covid", "precovid"), c("covid", "precovid"))
+ggboxplot(rbind(df.covid %>% mutate(period = "covid"),
+                df.precovid %>% mutate(period = "precovid")), 
+          x = "period", y = "IRR", 
+          color = "old_home", palette = c("#00AFBB", "#E7B800"),
+        ylab = "IRR", xlab = "Period")  + 
+  scale_y_log10() + 
+  stat_compare_means(aes(group = old_home))
+
+ggboxplot(rbind(df.covid %>% mutate(period = "covid"),
+                df.precovid %>% mutate(period = "precovid")), 
+          x = "period", y = "IRR", 
+          color = "period", palette = c("#00AFBB", "#E7B800"),
+        ylab = "IRR", xlab = "Period")  + 
+  scale_y_log10() + 
+  stat_compare_means()
+
+# density plot
+ggplot()+
+  geom_density(data = df.covid, aes(x = IRR ), col="red") +
+  geom_density(data = df.precovid, aes(x = IRR ), col="black") +
+  xlim(-1, 3) +
+  facet_wrap(~old_home, nrow=2) 
+  # ylab("Cumulative portion") +
+  # xlab("Attn rate (IR) change per 100 days in trt period, against ctrl period")
+signi_f = function(x){
+  signif(x, 3) 
+}
+df.covid %>%
+  group_by(old_home) %>%
+  summarise(NumberOfPatients = n(),
+            Q1 = quantile(IRR, 1/4), 
+            median = median(IRR),
+            Q3 = quantile(IRR, 3/4)) %>%
+  mutate(across(where(is.numeric), signi_f)) %>%
+  ungroup()
+
+```
+
+# Age group
+
+```{r}
+# Jul2020-Jul2021 65+
+ReferenceKeyWhitelist = stata %>% 
+  filter(age >= 65, eventdate >= as.Date("2020-07-01"), eventdate < as.Date("2021-07-01")) %>% 
+    select(ReferenceKey, DateofRegisteredDeath, eventdate, doadba, death, old_home, age) %>%
+  group_by(ReferenceKey) %>%
+  arrange(eventdate) %>%
+  summarise(DateofRegisteredDeath = last(DateofRegisteredDeath),
+            doadba = last(doadba),
+            death = last(death), 
+            old_home = last(old_home),
+            age = last(age),
+            .groups="drop") 
+
+nrow(ReferenceKeyWhitelist)
+# format is "yyy-mm-dd"
+startdate = "2016-01-01"
+elderly_death_visit = stata %>% 
+  filter(year(eventdate) > 2015,
+         eventdate < as.Date("2020-07-01"),
+         eventdate >= as.Date(startdate)
+         ) %>%
+  filter(ReferenceKey %in% (ReferenceKeyWhitelist %>% pull(ReferenceKey))) 
+
+df = elderly_death_visit %>% 
+  select(ReferenceKey, eventdate) %>%
+  mutate(period = ifelse(eventdate >= as.Date("2020-01-25"), "covid", "non-covid"))
+
+df2 = df %>% 
+  group_by(ReferenceKey, period) %>%
+  summarise(visits = n()) %>%
+  ungroup() %>% 
+  # complete combinations of referencekey and period
+  complete(ReferenceKey, period) %>%
+  group_by(ReferenceKey) %>%
+  summarise(covid = visits[period == "covid"],
+            `non-covid` = visits[period == "non-covid"]) %>%
+  replace_na(list(covid = 0, `non-covid` = 0)) %>%
+  # remove patients who did not visit AE once pre-covid
+  filter(`non-covid` > 8) %>%
+  ungroup()
+
+
+df3 = df2 %>%
+  left_join(ReferenceKeyWhitelist, by=c("ReferenceKey")) %>%
+  mutate(DateofRegisteredDeath = ifelse(is.na(DateofRegisteredDeath), "2021-07-01", DateofRegisteredDeath),
+         covidIR = covid / as.numeric(difftime("2020-07-01","2020-01-25")),
+         noncovidIR = `non-covid` / as.numeric(difftime("2020-01-24",startdate)),
+         deltaIR = covidIR - noncovidIR)  %>% 
+  mutate(change = ifelse(deltaIR < 0, "reduce", "increase"),
+         change = ifelse(deltaIR == 0, "nochange", change),
+         status = "survived",
+         status = ifelse(death==1, "28d_death", status),
+         status = ifelse(doadba==1, "doadba", status),
+         age_gp = case_when(
+           age < 75 ~ "65-74",
+           age >=75 & age < 85 ~ "75-84",
+           age >=85 & age < 95 ~ "85-94",
+           TRUE ~ "95+"
+         ))
+
+table(df3$change, df3$status, df3$age_gp)
+# table(df3$change, df3$old_home)
+chisq.test(df3$change, df3$old_home, correct = 1)
+```
+
+```{r}
+ylims <- df3 %>%
+  mutate(deltaIR =  deltaIR * 100) %>%
+  group_by(status, old_home) %>%
+  summarise(Q1 = quantile(deltaIR, 1/4), Q3 = quantile(deltaIR, 3/4)) %>%
+  ungroup() %>%
+  #get lowest Q1 and highest Q3
+  summarise(lowQ1 = min(Q1), highQ3 = max(Q3))
+
+# labels = c("Non-RCHE", "RCHE")
+# names(labels) = c("N", "Y")
+
+
+# cumulative plot
+ggplot(data = df3%>% filter(!is.na(status)), aes(x = deltaIR * 100, col = status))+
+  geom_step(aes(y=..y..),stat="ecdf") +
+  xlim(ylims$lowQ1, ylims$highQ3) +
+  ylab("Cumulative portion") +
+  xlab("Visit change per 100 days in covid period, against pre-covid period") +
+  # facet_wrap(~old_home, labeller = labeller(old_home = labels)) 
+  facet_wrap(~age_gp)
+
+signi_f = function(x){
+  signif(x, 3) * 100
+}
+df3 %>%
+  group_by(status, old_home) %>%
+  summarise(NumberOfPatients = n(),
+            Q1 = quantile(deltaIR, 1/4), 
+            median = median(deltaIR),
+            Q3 = quantile(deltaIR, 3/4)) %>%
+  mutate(across(where(is.numeric), signi_f)) %>%
+  ungroup()
+```
+
+```{r}
+
+ggplot(data = df3%>% filter(!is.na(status)), aes( x = deltaIR * 100, fill = status)) +
+    geom_density(alpha=.1) +
+    xlim(ylims$lowQ1, ylims$highQ3) +
+    # xlab("Frequency") +
+    xlab("Visit change per 100 days in pandemic") +
+  facet_wrap(~old_home)
+```
+
+```{r}
+source("./scripts/icd.R")
+comorbidities_quan_deyo <- stata %>% 
+          select(AENumber, ReferenceKey, death, paste0("DR", 1:10)) %>%
+          get_dx_comorbidities(icd9map = icd::icd9_map_quan_deyo)
+
+
+comorbidities_quan_deyo = comorbidities_quan_deyo %>%
+  left_join(stata %>% select(AENumber, age, eventdate), by = "AENumber") 
+comorbidities_quan_deyo = comorbidities_quan_deyo %>%
+  pivot_longer(cols = MI:HIV,names_to = "comorb", values_to = "score") %>%
+  # get only the positives
+  filter(score)
+comorbidities_quan_deyo_shortlisted = comorbidities_quan_deyo %>%
+  filter(eventdate < as.Date("2020-07-01"),
+         eventdate >= as.Date(startdate),
+         ReferenceKey %in% (ReferenceKeyWhitelist %>% pull(ReferenceKey))) 
+
+comorbidities_quan_deyo_shortlisted = 
+  aggregate(score~AENumber + age + ReferenceKey + eventdate + death, data=comorbidities_quan_deyo_shortlisted,sum) %>%
+  group_by(ReferenceKey) %>%
+  arrange(eventdate) %>%
+  summarise(eventdate = last(eventdate),
+            score = last(score))
+
+elderly_death_visit = 
+  comorbidities_quan_deyo_shortlisted %>% 
+  filter(year(eventdate) > 2015,
+         eventdate < as.Date("2020-07-01"),
+         eventdate >= as.Date(startdate)
+         ) 
+
+df = elderly_death_visit %>% 
+  select(ReferenceKey, eventdate, score) %>%
+  mutate(period = ifelse(eventdate >= as.Date("2020-01-25"), "covid", "non-covid"))
+
+df2 = df %>% 
+  group_by(ReferenceKey, period, score) %>%
+  summarise(visits = n(),
+            score = score) %>%
+  ungroup() %>% 
+  # complete combinations of referencekey and period
+  complete(ReferenceKey, period) %>%
+  replace_na(list(score = 0, visits = 0)) %>%
+  group_by(ReferenceKey) %>%
+  summarise(covid = visits[period == "covid"],
+            `non-covid` = visits[period == "non-covid"],
+            score = score) %>%
+  replace_na(list(covid = 0, `non-covid` = 0)) %>%
+  ungroup()
+
+
+df3 = df2 %>%
+  left_join(ReferenceKeyWhitelist, by=c("ReferenceKey")) %>%
+  mutate(DateofRegisteredDeath = ifelse(is.na(DateofRegisteredDeath), "2021-07-01", DateofRegisteredDeath),
+         covidIR = covid / as.numeric(difftime("2020-07-01","2020-01-25")),
+         noncovidIR = `non-covid` / as.numeric(difftime("2020-01-24",startdate)),
+         deltaIR = covidIR - noncovidIR)  %>% 
+  mutate(change = ifelse(deltaIR < 0, "reduce", "increase"),
+         change = ifelse(deltaIR == 0, "nochange", change),
+         status = "survived",
+         status = ifelse(death==1, "28d_death", status),
+         status = ifelse(doadba==1, "doadba", status),
+         ) 
+
+ylims <- df3 %>%
+  mutate(deltaIR =  deltaIR * 100) %>%
+  group_by(status, score) %>%
+  summarise(Q1 = quantile(deltaIR, 1/4), Q3 = quantile(deltaIR, 3/4)) %>%
+  ungroup() %>%
+  #get lowest Q1 and highest Q3
+  summarise(lowQ1 = min(Q1), highQ3 = max(Q3))
+
+
+# cumulative plot
+ggplot(data = df3%>% filter(!is.na(status)), aes(x = deltaIR * 100, col = status))+
+  geom_step(aes(y=..y..),stat="ecdf") +
+  # xlim(ylims$lowQ1, ylims$highQ3) +
+  ylab("Cumulative portion") +
+  xlab("Visit change per 100 days in covid period, against pre-covid period") +
+  # facet_wrap(~old_home, labeller = labeller(old_home = labels)) 
+  facet_wrap(~score)
+
+df3 %>%
+  group_by(status, score) %>%
+  summarise(NumberOfPatients = n(),
+            Q1 = quantile(deltaIR, 1/4), 
+            median = median(deltaIR),
+            Q3 = quantile(deltaIR, 3/4)) %>%
+  mutate(across(c("Q1", "median", "Q3"), signi_f)) %>%
+  ungroup()
+```
+
+
+```{r}
+summary = stata %>% 
+  filter(age >= 65, doadba==1) %>%
+  mutate(age_gp = case_when(
+           age < 75 ~ "65-74",
+           age >=75 & age < 85 ~ "75-84",
+           age >=85 & age < 95 ~ "85-94",
+           TRUE ~ "95+"
+         )) %>%
+  count(year = year(eventdate), age_gp) 
+summary %>%
+  pivot_wider(names_from = age_gp, values_from = n)
+```
+

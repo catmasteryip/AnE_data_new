@@ -1,0 +1,782 @@
+---
+title: "R Notebook"
+output: pdf_document
+---
+
+# libraries
+```{r}
+library(tidyverse)
+library(lubridate) # wrangling with dates
+library(scales) # vectors and colour scaling
+library(icd) # icd codes and comorbidities
+# library(haven)
+library(import) # namespace handling
+
+### visualization
+library(ggpubr) # plotting theme
+library(ggrepel) # text labels repel
+library(ggforce) # enhanced ggplot2 
+library(ggh4x) # enhanced ggplot2 
+library(patchwork) # combine plots
+library(here)
+library(parallel)
+```
+
+
+# load
+```{r}
+# load modules
+source("./scripts/import.R")
+source("./scripts/data_import.R")
+source("./scripts/icd.R")
+# source("./scripts/eda.R") # import the compare_19vs20 routine
+# source("./scripts/import.R")
+
+# set input/output directory
+data_dir <- "./data"
+out_dir <- "./viz/manuscript_fig_2021_fullyr"
+if (!dir.exists(out_dir)) dir.create(out_dir)
+```
+
+# import
+```{r}
+### attendance records from stata file
+stata = mclapply(list("AE_Attendance_transformed_20150101_20210917.csv"), import_csv, mc.cores=40)
+stata2 = mclapply(list("AE_Attendance_transformed_20210918_20211231.csv"), import_csv, mc.cores=40)
+stata = rbind(stata, stata2)
+
+stata = stata %>%
+  mutate(year = lubridate::year(eventdate),
+         eventdate = as.Date(eventdate)) %>% 
+  filter(eventdate<max(eventdate)-28,
+         year != 2015)
+
+### comorbidities
+comorbidities_quan_deyo <- stata %>%
+          select(year, eventdate, AENumber, ReferenceKey, death, paste0("DR", 1:10)) %>%
+          icd::icd9_comorbid(map = icd::icd9_map_quan_deyo, visit_name = "AENumber", icd_name = paste0("DR", 1:10)) %>%
+          mutate(NoneMapped = (rowSums(across(-c(AENumber, death, NoCode))) == 0 & !NoCode))
+  
+```
+
+
+```{r figure 1}
+# //// Panel A ------------------------------------------------------------
+
+pal.death <- c(
+        "1" = "#F8766D", # death = pink
+        "0" =  "#7CAE00" # survived = green
+        # "-1" = "#00BFC4" # overall = cyan
+)
+
+
+### Dataframe setup
+date.2021 = stata %>% 
+  select(eventdate) %>% unique() %>% 
+  filter(year(eventdate)==2021) %>%
+  select(eventdate) %>%
+  mutate(month = month(eventdate), 
+         day = day(eventdate)) 
+
+# count data
+cts.overall <- stata  %>%
+        count(eventdate, death) %>% 
+  mutate(year = factor(year(eventdate)),
+         month = month(eventdate), 
+         day = day(eventdate)) 
+# count data of control/non-covid years
+noncovid.cts.overall = cts.overall %>% 
+  filter(!(year %in% c(2020,2021))) %>%
+  group_by(month,day, death) %>%
+  summarise(n = sum(n) / 4) %>%
+  mutate(year = "2016-2019 avg")
+# count data of control/non-covid years, same-period as 2021
+sameperiod.cts.overall = noncovid.cts.overall %>% 
+  filter(month %in% date.2021$month & day %in% date.2021$day) %>%
+  mutate(year = "Same-period\n2016-2019 avg")
+# count data of trt/covid years
+covid.cts.overall = cts.overall %>%
+  filter(year %in% c(2020,2021)) %>%
+  select(-eventdate)
+# bind tables vertically
+cts.overall = bind_rows(covid.cts.overall, noncovid.cts.overall, sameperiod.cts.overall) %>%
+  group_by(year, death) %>%
+  summarise(n = sum(n)) %>%
+  mutate(
+          death = factor(death),
+          year = factor(year, levels = c("Same-period\n2016-2019 avg", "2021","2016-2019 avg","2020"))
+  )
+# (optional) summary table
+cts.overall %>% pivot_wider(names_from = death,names_glue="death_{death}",values_from=n) %>% 
+  mutate(attn = death_0+death_1, 
+         death = death_1) %>%
+  select(-death_0, -death_1) %>% View()
+
+y_limit <- cts.overall %>% filter(death == 1) %>% pull(n) %>% max()
+y_limit <- y_limit * 2
+
+### Plotting
+fig.overall <- (cts.overall %>% 
+                ggplot(aes(x = year, y = n, fill = death))
+                + geom_col()
+                + xlab("")
+                + ylab("ED Attendance")
+                + theme(legend.position = "top")
+)
+
+### output if not use facet_zoom
+death <- ( cts.overall %>% 
+                   filter(death == 1) %>% 
+                   ggplot(aes(x = year, y = n, fill = death))
+           + geom_col()
+           + xlab("")
+           + ylab("") 
+           + theme(legend.position = "none")
+)
+
+fig1A.patchwork <- (
+        fig.overall
+        / death
+        # & plot_layout(guides = "collect")
+        & scale_fill_manual(name = "28-day Mortality",
+                            breaks = names(pal.death),
+                            labels = c("Died", "Survived"),
+                            values = pal.death)
+        & scale_y_continuous(
+                expand = expansion(mult = c(0, 0.2)),
+                labels = scales::label_number(suffix = " K", big.mark = "", scale = 1e-3)
+        )
+        & theme(panel.grid.major = element_blank(), 
+                panel.grid.minor = element_blank(),
+                panel.background = element_blank(),
+                axis.line = element_line(colour = "black")
+        )
+)
+
+
+# ///// Panel B -----------------------------------------------------------
+# COVID-19 deaths line plot
+
+# get updated covid case number, to be cut by last date of AE record
+covid <- import_HK_covid_data_from_JohnHopkins(data_type="cases")
+covid_deaths <- import_covid_deaths(dir = NULL)
+wave.df <- import_waves()
+
+date.df <- import_dates(wave.df=wave.df, end=max(ymd(stata$eventdate))) 
+# %>% select(-period)
+
+
+### setup
+axis.text.x.bottom <- element_text(size = 8, hjust = 1, vjust = 1, angle = 45)
+
+covid_deaths_total <- covid_deaths %>% 
+        filter(year(date) != 2019) %>%
+        pull(n) %>% 
+        sum()
+
+### Figure B
+df <- covid %>% 
+        right_join(date.df, by = "date") %>% 
+        filter(year != 2019) %>%
+        arrange(date) %>% 
+        ### join deaths
+        left_join(covid_deaths, by = "date", suffix = c("_cases", "_deaths")) %>% 
+        replace_na(list(n_cases = 0, n_deaths = 0)) %>% 
+        ### pivot
+        pivot_longer(cols = c(n_cases, n_deaths), names_to = "var", values_to = "n", names_prefix = "n_")
+
+
+figB1 <- ( df %>% 
+                   filter(var == "cases", year  != 2019) %>% 
+                   ggplot(aes(x = date, y = n))
+           + geom_line()
+           # wave dynamics
+           + geom_rect(data= filter(wave.df,year != 2019),
+                       aes(xmin=start, xmax=end, ymin=-Inf, ymax=Inf),
+                       fill="red",
+                       alpha=0.1,
+                       inherit.aes = FALSE)
+           + geom_text(data = filter(wave.df,year != 2019),
+                       aes(y = Inf, x = start, vjust = 1,
+                           label = paste0(c("1T", "2T", "3T","4T","2021"), "\n", day(start), "/", month(start))),
+                       size = 2.5)
+           + geom_text(data = filter(wave.df,year != 2019,wave != 4),
+                       aes(y = Inf, x = end, vjust = 1,
+                           label = paste0(c("1R", "2R", "3R","4R"), "\n", day(end), "/", month(end))),
+                       size = 2.5)
+           + scale_x_date(
+                   date_labels = "%d-%b-%Y",
+                   date_breaks = "1 month",
+                   date_minor_breaks = "1 week",
+                   expand = c(0,0)
+           )
+           + scale_y_continuous(expand = expansion(add = c(0, 50)))
+           + xlab("")
+           + ylab("Confirmed\nCOVID-19 Cases")
+           + theme(legend.position = "none",
+                   axis.text.x = element_blank(),
+                   axis.ticks = element_blank(),
+                   axis.line.x.bottom = element_blank())
+)
+
+figB2 <- ( df %>% 
+                   filter(var == "deaths", year !=2019) %>% 
+                   ggplot(aes(x = date, y = n))
+           + geom_line()
+           # wave dynamics
+           + geom_rect(data= filter(wave.df, year !=2019), 
+                       aes(xmin=start, xmax=end, ymin=-Inf, ymax=Inf), 
+                       fill="red", 
+                       alpha=0.1, 
+                       inherit.aes = FALSE)
+           
+           
+           + scale_x_date(
+                   date_labels = "%d-%b-%Y",
+                   date_breaks = "1 month",
+                   date_minor_breaks = "1 week",
+                   expand = c(0,0)
+           )
+           + scale_y_continuous(breaks = c(0, 5), expand = expansion(mult = c(0.1, 0)))
+           + xlab("")
+           + ylab("COVID-19\nDeaths")
+           + theme(legend.position = "none",
+                   axis.text.x = axis.text.x.bottom)
+           + labs(subtitle = paste0("28-day deaths with COVID-19: ", covid_deaths_total))
+)
+
+fig1B.patchwork <- (
+        figB1 / figB2
+        + plot_layout(heights = c(3,1))
+        & geom_line()
+        & theme(panel.grid.major = element_blank(), 
+                panel.grid.minor = element_blank(),
+                panel.background = element_blank(),
+                axis.line = element_line(colour = "black"),
+                legend.position = "none"
+        )
+)
+
+
+fig1B.patchwork
+
+
+# Panels C and D: Deaths and waiting times ------------------------------------------------
+wave.df <- import_waves()
+pal.death <- c(
+        "1" = "#F8766D", # death = pink
+        "0" =  "#7CAE00", # survived = green
+        "-1" = "#00BFC4" # overall = cyan
+)
+
+axis.text.x.bottom <- element_text(size = 8, hjust = 1, vjust = 1, angle = 45)
+
+#### Dataframe setup
+
+cts <- stata %>% 
+        select(year, eventdate, death) %>% 
+        count(year, eventdate, death) %>%
+        # filter(eventdate<max(eventdate)-28) %>% 
+        bind_rows(group_by(., year, eventdate) %>%
+                    summarise(n = sum(n), .groups = "drop") %>%
+                    mutate(death = -1)) %>%
+        mutate(
+                year = factor(year),
+                death = factor(death),
+                yday = yday(eventdate),
+        ) %>%
+        arrange(year, eventdate, death) 
+
+cts.covid = cts %>%
+  filter(year(eventdate) >= 2020) 
+
+cts.noncovid = cts %>%
+  filter(year(eventdate) < 2020) %>%
+  group_by(yday, death) %>%
+  summarise(n = sum(n) / 4) %>%
+  mutate(year = "2016-2019 avg",
+         eventdate = as.Date(yday, origin = "2016-01-01")) %>%
+  # discard 2016 366th day data
+  filter(yday != 366)
+
+cts = bind_rows(cts.covid, cts.noncovid) 
+
+### y-axis limits
+attn_limits <- c(
+        cts %>% filter(death == -1) %>% pull(n) %>% min(),
+        cts %>% filter(death == -1) %>% pull(n) %>% max()
+)
+
+death_limits <- c(
+        cts %>% filter(death == 1) %>% pull(n) %>% min(),
+        cts %>% filter(death == 1) %>% pull(n) %>% max()
+)
+
+
+### PLOTS
+# ///// Plot C1 -----------------------------------------------------------
+# Non-covid years ED attendance
+df <- cts %>% 
+        filter(death == -1, !(year %in% c("2020","2021"))) %>%
+        mutate(rollmean = zoo::rollmean(n, 7, na.pad = T, align = "right"))
+df.last <- df %>% filter(yday == last(yday))
+figC1 <- (df %>% 
+                  ggplot(aes(x = eventdate, y = n, col = death))
+          + geom_point(alpha = 0.2)
+          + geom_line(aes(y = rollmean))
+          ### limits
+          + scale_y_continuous(limits = attn_limits,
+                               sec.axis = dup_axis(
+                                       labels = "7-day\nrollmean",
+                                       breaks = df.last$rollmean,
+                                       name = NULL))
+          + scale_x_date(
+                  date_labels = "%d-%b",
+                  date_breaks = "1 month",
+                  date_minor_breaks = "1 week",
+                  expand = c(0,0)
+          )
+          + scale_color_manual(values = pal.death)
+          + xlab("")
+          + ylab("ED Attendance")
+          + theme(axis.title.x=element_blank(),
+                  axis.text.x=element_blank(),
+                  axis.ticks.x=element_blank(),
+                  axis.line.x.bottom = element_blank(),
+                  legend.position = "none")
+          + labs(title = "2016-2019 average")
+)
+
+figC1
+
+# ///// Plot C2 -----------------------------------------------------------
+# Non-covid years 28d mortality
+
+df <- cts %>% 
+        filter(death == 1, !(year %in% c("2020","2021"))) %>%
+        mutate(rollmean = zoo::rollmean(n, 7, na.pad = T, align = "right"))
+df.last <- df %>% filter(yday == last(yday))
+figC2 <- (df %>% 
+                  ggplot(aes(x = eventdate, y = n, col = death))
+          + geom_point(alpha = 0.2)
+          + geom_line(aes(y = zoo::rollmean(n, 7, na.pad = T, align = "right")))
+          ### limits
+          + scale_y_continuous(limits = death_limits,
+                               sec.axis = dup_axis(
+                                       labels = "7-day\nrollmean",
+                                       breaks = df.last$rollmean,
+                                       name = NULL))
+          + scale_x_date(
+                  date_labels = "%d-%b-%Y",
+                  date_breaks = "1 month",
+                  date_minor_breaks = "1 week",
+                  expand = c(0,0)
+          )
+          + scale_color_manual(values = pal.death)
+          + xlab("")
+          + ylab("28-day Deaths")
+          + theme(axis.title.x=element_blank(),
+                  axis.text.x=element_blank(),
+                  axis.ticks.x=element_blank(),
+                  axis.line.x.bottom = element_blank(),
+                  legend.position = "none")
+          
+)
+
+# ///// Plot D1 -----------------------------------------------------------
+# Covid years ED attendance
+df <- cts %>% 
+        filter(death == -1, year %in% c("2020","2021")) %>%
+        mutate(rollmean = zoo::rollmean(n, 7, na.pad = T, align = "right"))
+df.last <- df %>% filter(eventdate == last(eventdate))
+figD1 <- (df %>% 
+                  ggplot(aes(x = eventdate, y = n, col = death))
+          + geom_point(alpha = 0.2)
+          + geom_line(aes(y = zoo::rollmean(n, 7, na.pad = T, align = "right")))
+          ## limits
+          + scale_y_continuous(limits = attn_limits,
+                               sec.axis = dup_axis(
+                                       labels = "7-day\nrollmean",
+                                       breaks = df.last$rollmean,
+                                       name = NULL))
+          + geom_rect(data = filter(wave.df, year != 2019), 
+                      aes(xmin = start, xmax = end, ymin = -Inf, ymax = Inf), 
+                      fill="red", alpha=0.1, inherit.aes = FALSE)
+          + scale_x_date(
+                  date_labels = "%d-%b-%Y",
+                  date_breaks = "1 month",
+                  date_minor_breaks = "1 week",
+                  expand = c(0,0)
+          )
+          + scale_color_manual(values = pal.death)
+          + xlab("")
+          + ylab("ED Attendance")
+          + theme(axis.title.x=element_blank(),
+                  axis.text.x=element_blank(),
+                  axis.ticks.x=element_blank(),
+                  axis.line.x.bottom = element_blank(),
+                  legend.position = "none")
+          + labs(title = "2020-2021") 
+          + geom_vline(xintercept = as.Date("2021-01-01")) 
+          + annotate("text",y=Inf, x=as.Date("2021-01-01"), label="2021", vjust=1.5, hjust=-.3)
+)
+
+# ///// Plot D2 -----------------------------------------------------------
+# Covid years 28d mortality
+df <- cts %>% 
+        filter(death == 1, year %in% c("2020","2021")) %>%
+        mutate(rollmean = zoo::rollmean(n, 7, na.pad = T, align = "right"))
+df.last <- df %>% filter(eventdate == max(eventdate))
+figD2 <- (df %>% 
+                  ggplot(aes(x = eventdate, y = n, col = death))
+          + geom_point(alpha = 0.2)
+          + geom_line(aes(y = zoo::rollmean(n, 7, na.pad = T, align = "right")))
+          ### limits
+          + scale_y_continuous(limits = death_limits,
+                               sec.axis = dup_axis(labels = "7-day\nrollmean",
+                                                   breaks = df.last$rollmean,
+                                                   name = NULL))
+          + geom_rect(data = filter(wave.df, year != 2019), 
+                      aes(xmin = start, xmax = end, ymin = -Inf, ymax = Inf), 
+                      fill="red", alpha=0.1, inherit.aes = FALSE)
+          + scale_x_date(
+                  date_labels = "%d-%b-%Y",
+                  date_breaks = "1 month",
+                  date_minor_breaks = "1 week",
+                  expand = c(0,0)
+          )
+          + scale_color_manual(values = pal.death)
+          + xlab("")
+          + ylab("28-day Deaths")
+          + theme(axis.title.x=element_blank(),
+                  axis.text.x=element_blank(),
+                  axis.ticks.x=element_blank(),
+                  axis.line.x.bottom = element_blank(),
+                  legend.position = "none")
+          + geom_vline(xintercept = as.Date("2021-01-01")) 
+          + annotate("text",y=Inf, x=as.Date("2021-01-01"), label="2021", vjust=1.5, hjust=-.3)
+)
+
+
+
+fig1CD.list <- list(C1 = figC1, 
+                    D1 = figD1,
+                    C2 = figC2, 
+                    D2 = figD2
+                    ) %>% 
+        map(function(p) p +
+                    theme(panel.grid.major = element_blank(), 
+                          panel.grid.minor = element_blank(),
+                          panel.background = element_blank(), 
+                          axis.line = element_line(colour = "black"),
+                          axis.line.y.right = element_blank()
+                    )
+        )
+
+fig1CD.list
+
+
+# //// Merge --------------------------------------------------------------
+
+fig1.plist <- c(
+        list(
+                A = fig1A.patchwork & coord_flip() ,
+                B = fig1B.patchwork
+        ),
+        fig1CD.list
+)
+
+
+fig1 <- ( 
+        wrap_plots(fig1.plist)
+        + plot_layout(ncol = 2, heights = c(4,2,2,2,2), widths = c(1,1.6,1.6,1,1.6))
+        + plot_annotation(tag_levels = list(c("A", "", "B", "", "C", "D", "", "", "", "")))
+        & theme(axis.title.y.left=element_text(size=8),
+                axis.text.y.left=element_text(size=8),
+                axis.text.y.right=element_text(size=8),
+                legend.text=element_text(size=8),
+                legend.title=element_text(size=8),
+                plot.subtitle=element_text(size=8)
+        )
+)
+
+
+fig1
+ggsave(plot=fig1, file=file.path(out_dir, "fig1_raw.svg"),  width = 10, height = 10)
+invisible(dev.off())
+gc()
+```
+
+
+```{r fig S1}
+tabulate_entry_death_diff <- function(df, wave.df) {
+        
+        # alternatively
+        selected.records <- df %>% 
+                select(year, AENumber, eventdate, DateofRegisteredDeath, death) %>% 
+                mutate(DateofRegisteredDeath = lubridate::ymd(DateofRegisteredDeath)) %>% 
+                filter(death == 1)
+        
+        daydiff <- selected.records %>% 
+                ### 3. compute the difference in days 
+                ###    between entry date and registered death date
+                mutate(diff = DateofRegisteredDeath - eventdate) %>% 
+                ### 4. counts for wave vs non-wave, 2019 vs 2020
+                left_join(select(wave.df, date, wave_num), by = c("eventdate" = "date")) %>% 
+                mutate(wave = str_detect(wave_num, "W")) %>% 
+                # cleaning
+                mutate(year = factor(year)) %>% 
+                mutate(diff = as.numeric(diff)) %>% 
+                mutate(wave = convert_to_facet_label(wave)) %>% 
+                filter(diff >= 0) %>%   # dropped 1 record, most probably wrong data
+                filter(diff <= 28) # dropped 1 records of 29 days diff
+        
+        cts <- daydiff %>% count(year, wave, diff)
+        
+        return(cts)
+}
+
+wave.df <- import_dates(import_waves3()) %>% 
+        mutate(year2020 = year == 2020) %>%
+        mutate(in_wave  = year == 2020 & wave_num %in% c("W1", "W2", "W3", "W4")) %>% 
+        mutate(wave1 = year == 2020 & wave_num == "W1") %>% 
+        mutate(wave2 = year == 2020 & wave_num == "W2") %>% 
+        mutate(wave3 = year == 2020 & wave_num == "W3") %>% 
+        mutate(wave4 = year == 2020 & wave_num == "W4") %>%
+        mutate(daySincePandemic = as.numeric(date - ymd("2020-01-25")) + 1) %>% 
+        mutate(daySincePandemic = ifelse(daySincePandemic < 0, 0, daySincePandemic)) %>% 
+        left_join(import_waves3() %>% 
+                          rename(wave_num = wave) %>% 
+                          select(year, wave_num, start), 
+                  by = c("year", "wave_num")) %>% 
+        mutate(daySinceWave = ifelse(year == 2020 & in_wave == T,
+                                     as.numeric(date - start) + 1, 0)) %>% 
+        mutate(afterPandemic    = daySincePandemic > 0) %>% 
+        mutate(across(where(is.logical), as.numeric))
+
+
+figS1 <- ( stata %>% 
+        tabulate_entry_death_diff(wave.df = wave.df) %>% 
+        mutate(wave = ifelse(wave == "wave(FALSE)", "Non-wave periods", "Wave periods")) %>% 
+        mutate(wave = factor(wave, levels = c("Wave periods", "Non-wave periods"))) %>% 
+        ggplot(aes(x = diff, y= n, col = year, group = year))
+        + geom_line(size = 0.8)
+        + geom_point(size = 1.5)
+        + facet_wrap(~wave)
+        + labs(x = "Difference in Dates of Registered Death and Last ED Entry (days)",
+               y = "Total 28-day Mortality Counts")
+        + theme(
+                legend.position = "bottom",
+                panel.grid.major = element_blank(),
+                panel.grid.minor = element_blank(),
+                panel.background = element_blank(),
+                axis.line = element_line(colour = "black")
+        )
+)
+
+svg(filename = file.path(out_dir, "figS1.svg"), height = 4, width = 8.3 - 0.75*2)
+figS1
+invisible(dev.off())
+gc()
+```
+
+# waiting time supplementary figure
+
+```{r}
+
+medians <- stata %>% 
+        ### select WaitingTimetocubicleMinute only
+        select(eventdate, WaitingTimetocubicleMinute, TriageCategory) %>% 
+        mutate(urgent = ifelse(TriageCategory %in% 1:3, 1, 0)) %>%
+        select(-TriageCategory) %>% 
+        ## median
+        group_by(eventdate, urgent) %>% 
+        summarise(across(everything(), median, na.rm = T), .groups = "drop") %>% 
+        ## pivot
+        pivot_longer(cols = -c(eventdate, urgent),
+                     names_to = "var", values_to = "n") %>% 
+        group_by(var, urgent) %>% 
+        arrange(eventdate) %>% 
+        mutate(rollmean = zoo::rollmean(n, 7, na.pad = T, align = "right")) %>% 
+        ungroup() 
+        # filter(eventdate < max(eventdate)-28)
+  
+
+medianUrgent_limits <- c(
+        medians %>% filter(urgent == 1) %>% pull(n) %>% min(),
+        medians %>% filter(urgent == 1) %>% pull(n) %>% max()
+)
+
+medianNonUrgent_limits <- c(
+        medians %>% filter(urgent == 0) %>% pull(n) %>% min(),
+        medians %>% filter(urgent == 0) %>% pull(n) %>% max()
+)
+#### WAITING TIME MEDIANS
+
+df <- medians %>% 
+  filter(year(eventdate) <= 2019, urgent == 1) %>% 
+  mutate(yday = yday(eventdate)) %>%
+  select(-eventdate, -urgent) %>%
+  group_by(yday) %>%
+  mutate(n = mean(n),
+         rollmean = mean(n)) %>%
+  distinct()
+df.last <- df %>% 
+  ungroup() %>%
+  filter(yday == max(yday))
+
+figE1 <- (
+        df %>% 
+                ## ggplot
+                ggplot(aes(x = yday, y = n))
+        + geom_point(alpha = 0.2) 
+        + geom_line(aes(y = zoo::rollmean(n, 7, na.pad = T, align = "right")))
+        ### limits
+        + scale_y_continuous(limits = medianUrgent_limits,
+                             sec.axis = dup_axis(labels = "7-day\nrollmean",
+                                                 breaks = df.last$rollmean,
+                                                 name = NULL),
+                             breaks = scales::pretty_breaks(n = 3)) 
+        # + scale_x_date(
+        #         date_labels = "%d-%b-%Y",
+        #         date_breaks = "1 month",
+        #         date_minor_breaks = "1 week",
+        #         expand = c(0,0)
+        # )
+        + scale_color_manual(values = pal.death)
+        + xlab("")
+        + ylab("Triage 1-3\nMedian Waiting\nTime (min)")
+        + theme(axis.title.x=element_blank(),
+                axis.text.x=element_blank(),
+                axis.ticks.x=element_blank(),
+                axis.line.x.bottom = element_blank(),
+                legend.position = "none")
+)
+
+df <- medians %>% 
+  filter(year(eventdate) <= 2019, urgent == 0) %>% 
+  mutate(yday = yday(eventdate)) %>%
+  select(-eventdate, -urgent) %>%
+  group_by(yday) %>%
+  mutate(n = mean(n),
+         rollmean = mean(n)) %>%
+  distinct()
+df.last <- df %>% 
+  ungroup() %>%
+  filter(yday == max(yday))
+figF1 <- (
+        df %>% 
+                ## ggplot
+                ggplot(aes(x = yday, y = n))
+        + geom_point(alpha = 0.2)
+        + geom_line(aes(y = zoo::rollmean(n, 7, na.pad = T, align = "right")))
+        ### limits
+        + scale_y_continuous(limits = medianNonUrgent_limits,
+                             sec.axis = dup_axis(labels = "7-day\nrollmean",
+                                                 breaks = df.last$rollmean,
+                                                 name = NULL))
+        # + scale_x_date(
+        #         date_labels = "%d-%b-%Y",
+        #         date_breaks = "1 month",
+        #         date_minor_breaks = "1 week",
+        #         expand = c(0,0)
+        # )
+        + scale_color_manual(values = pal.death)
+        + xlab("Calendar Day")
+        + ylab("Triage 4-5\nMedian Waiting\nTime (min)")
+        + theme(legend.position = "none",
+                axis.text.x = axis.text.x.bottom)
+)
+
+df <- medians %>% 
+  filter(year(eventdate) > 2019, urgent == 1) %>% 
+  mutate(yday = yday(eventdate)) 
+df.last <- df %>% 
+  ungroup() %>%
+  filter(yday == max(yday))
+
+figE2 <- (
+        df %>% 
+                ## ggplot
+                ggplot(aes(x = eventdate, y = n))
+        + geom_point(alpha = 0.2)
+        + geom_line(aes(y = zoo::rollmean(n, 7, na.pad = T, align = "right")))
+        ### limits
+        + scale_y_continuous(limits = medianUrgent_limits,
+                             sec.axis = dup_axis(labels = "7-day\nrollmean",
+                                                 breaks = df.last$rollmean,
+                                                 name = NULL),
+                             breaks = scales::pretty_breaks(n = 3))
+        + scale_x_date(
+                date_labels = "%d-%b-%Y",
+                date_breaks = "1 month",
+                date_minor_breaks = "1 week",
+                expand = c(0,0)
+        )
+        + scale_color_manual(values = pal.death)
+        + xlab("")
+        + ylab("Triage 1-3\nMedian Waiting\nTime (min)")
+        + geom_rect(data = filter(wave.df, year !=2019), 
+                    aes(xmin = start, xmax = end, ymin = -Inf, ymax = Inf), 
+                    fill="red", alpha=0.1, inherit.aes = FALSE)
+        + theme(axis.title.x=element_blank(),
+                axis.text.x=element_blank(),
+                axis.ticks.x=element_blank(),
+                axis.line.x.bottom = element_blank(),
+                legend.position = "none")
+        
+        + geom_vline(xintercept = as.Date("2021-01-01")) 
+        + annotate("text",y=Inf, x=as.Date("2021-01-01"), label="2021", vjust=1.5, hjust=-.3)
+)
+
+df <- medians %>% 
+  filter(year(eventdate) > 2019, urgent == 0) %>% 
+  mutate(yday = yday(eventdate)) 
+df.last <- df %>% 
+  ungroup() %>%
+  filter(yday == max(yday))
+
+figF2 <- (
+        df %>% 
+                ## ggplot
+                ggplot(aes(x = eventdate, y = n))
+        + geom_point(alpha = 0.2)
+        + geom_line(aes(y = zoo::rollmean(n, 7, na.pad = T, align = "right")))
+        ### limits
+        + scale_y_continuous(limits = medianNonUrgent_limits,
+                             sec.axis = dup_axis(labels = "7-day\nrollmean",
+                                                 breaks = df.last$rollmean,
+                                                 name = NULL))
+        + scale_x_date(
+                date_labels = "%d-%b-%Y",
+                date_breaks = "1 month",
+                date_minor_breaks = "1 week",
+                expand = c(0,0)
+        )
+        + scale_color_manual(values = pal.death)
+        + xlab("Date")
+        + ylab("Triage 4-5\nMedian Waiting\nTime (min)")
+        + geom_rect(data = filter(wave.df, year !=2019), 
+                    aes(xmin = start, xmax = end, ymin = -Inf, ymax = Inf), 
+                    fill="red", alpha=0.1, inherit.aes = FALSE)
+        + theme(legend.position = "none",
+                axis.text.x = axis.text.x.bottom)
+        
+        + geom_vline(xintercept = as.Date("2021-01-01")) 
+        + annotate("text",y=Inf, x=as.Date("2021-01-01"), label="2021", vjust=1.5, hjust=-.3) 
+)
+
+figS1 = (figE1+figE2+figF1+figF2 +
+  plot_layout(ncol = 2, 
+              widths = c(1,1.6,1,1.6))) &
+  theme(
+                legend.position = "bottom",
+                panel.grid.major = element_blank(),
+                panel.grid.minor = element_blank(),
+                panel.background = element_blank(),
+                axis.line = element_line(colour = "black")
+        )
+figS1
+ggsave(figS1, filename = file.path(out_dir, "waitingtime.svg"), height = 5, width=10)
+```
+

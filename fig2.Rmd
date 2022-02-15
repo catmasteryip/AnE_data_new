@@ -1,0 +1,369 @@
+---
+title: "2SLS by age and gender"
+output: pdf_document
+---
+
+# import libraries
+
+```{r}
+library(haven) 
+library(lubridate)
+library(here)
+library(parallel)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(stringr)
+library(RColorBrewer)
+library(ivreg)
+library(generics)
+
+# prevent masking
+rename = dplyr::rename
+select = dplyr::select
+summarise = dplyr::summarise
+filter = dplyr::filter
+here = here::here
+```
+
+# import scripts
+
+```{r}
+# working_dir = here()
+# script_dir = here('scripts')
+# csv_dir = here('data')
+# plot_dir = here('viz/manuscript_fig_2021_included')
+# result_dir = here("results")
+# paths = c("fear_index.R","conditions_setting.R","data_import.R","import.R")
+# for( path in paths){
+#   source(here(script_dir, path))
+# }
+source("./scripts/import.R")
+source("./scripts/data_import.r")
+```
+
+# import dataset and subsetting
+
+```{r}
+# get dataset
+stata = mclapply(list("AE_Attendance_transformed_20150101_20210917.csv"), import_csv, mc.cores=40)
+stata = stata[[1]]
+
+# select columns
+selected_columns = c('eventdate',"DateofRegisteredDeath","age","Sex_num","death","old_home")
+
+# subset dataset
+selected = stata %>% 
+  select(selected_columns) 
+
+selected = selected %>% 
+  mutate(eventdate = as.Date(eventdate)) %>%
+  filter(year(eventdate)!=2015) %>%
+  # # (optional) discard last 28-day data 
+  filter(eventdate<max(eventdate)-28)
+
+max(selected$eventdate)
+```
+
+# Impute filtering condition info, group by age and gender
+
+```{r}
+# age and gender filtering conditions 
+demo_conditions = c("age>= 65 & Sex_num == 1","age >= 65 & Sex_num == 0",
+                    "age>=55 & age<65 & Sex_num==1","age>=55 & age<65 & Sex_num==0",
+                    "age>=45 & age <55 & Sex_num==1","age>=45 & age <55 & Sex_num==0",
+                  "age>=35 & age <45 & Sex_num==1","age>=35 & age <45 & Sex_num==0",
+                    "age>=18 & age <35 & Sex_num==1","age>=18 & age <35 & Sex_num==0",
+                    "age>=0 & age <18 & Sex_num==1","age>=0 & age <18 & Sex_num==0")
+# age and gender filtering conditions in readable form
+demo_conditionsTextual = c("65+ & M","65+ & F",
+                           "55-64 & M","55-64 & F",
+                           "45-54 & M","45-54 & F",
+                           "35-44 & M","35-44 & F",
+                           "18-34 & M","18-34 & F",
+                           "0-17 & M","0-17 & F")
+# concat strings in dplyr-readable form
+conditions = paste(paste0(demo_conditions,"~\"",demo_conditionsTextual,"\";"),collapse ='')
+
+selected = selected %>% 
+  mutate(cond=case_when(
+    !!! rlang::parse_exprs(conditions)
+  ))
+
+
+```
+
+# produce daily data table
+
+```{r}
+daily = selected %>% group_by(cond) %>% count(eventdate) %>% 
+  rename(attn=n) %>%
+  # mutate year and t, number of calendar days since 1st Jan
+  mutate(Year=year(eventdate)) %>%
+  drop_na()
+
+# merge with wave settings
+wave.df <- import_waves(twosls = T)
+date.df <- import_dates(wave.df=wave.df, 
+                        start = min(selected$eventdate), 
+                        end=max(selected$eventdate))
+# impute after-wave periods
+date.df = date.df %>%
+  mutate(wave_num = ifelse(is.na(wave_num) & date>min(wave.df$start),"after-wave",wave_num))%>%
+  mutate(wave_num = ifelse(date<min(wave.df$start),0,wave_num))
+```
+
+# attn reduction per wave, age group and gender (using 2021 data as well)
+
+```{r}
+attn.reduction.age = compare_waves(selected, date.df)
+attn.reduction = attn.reduction.age %>% 
+  # impute gender col
+  mutate(gender = ifelse(grepl("M",cond),"M","F"),
+           cond = str_sub(cond,1,-5))
+```
+
+# Fig2a Attn reduction per wave, age group and gender including 0-17
+
+```{r}
+attn_reduction_plot = function(df, conditions){
+  attn.reduction = df %>%
+    filter(!is.na(wave_num))
+    ggplot() +
+      geom_line(data=attn.reduction %>% filter(cond %in% conditions, gender=="M",!wave_num %in% c("after-wave","0")),aes(x=wave_num,y=percent_diff,group=1,col=gender)) +
+      geom_line(data=attn.reduction %>% filter(cond %in% conditions, gender=="F",!wave_num %in% c("after-wave","0")),aes(x=wave_num,y=percent_diff,group=1,col=gender)) +
+      geom_hline(data=attn.reduction %>% filter(cond %in% conditions, gender=="M",wave_num=="after-wave"),aes(yintercept=percent_diff,group=1,col=gender),linetype="dashed") +
+      geom_hline(data=attn.reduction %>% filter(cond %in% conditions, gender=="F",wave_num=="after-wave"),aes(yintercept=percent_diff,group=1,col=gender),linetype="dashed") +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+            panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+      labs(x="Wave Period",y="Seasonally Adjusted Attendance Change %",col="Gender") +
+      theme(legend.position = "bottom") +
+      facet_wrap(~cond,nrow=1) +
+      geom_hline(yintercept = 0)
+}
+f2a.left = attn_reduction_plot(attn.reduction, c("0-17"))
+f2a.left
+
+f2a.middle = attn_reduction_plot(attn.reduction, c("18-34","35-44"))
+f2a.middle
+
+f2a.right = attn_reduction_plot(attn.reduction, c("45-54","55-64","65+"))
+f2a.right
+
+write_xlsx(attn.reduction %>% filter(wave_num!=0), here::here("results","age_gender_wave_attn.xlsx"))
+```
+
+# Fig 2b Bar chart of YoY attn & death change across age groups only
+
+```{r}
+results = compare_yearly(selected %>%
+                            mutate(year = year(eventdate),
+                                   # remove gender from cond
+                                   cond = gsub('.{3}$', '', cond)) %>%
+                            filter(!is.na(cond)))
+
+cts.overall.age = results[[1]] 
+  
+cts.percentdiff.overall.age = results[[2]]
+```
+
+
+
+```{r}
+# ///// Fig 2B -----------------------------------------------------------
+# Attendance and 28d mortality episode comparison among age groups
+fig2b1 =
+  ggplot() +
+  geom_col(data = filter(cts.overall.age, death == -1, ctrltrt == "ctrl"), aes(x=cond,y=n, fill = ctrltrt), width = 0.5) +
+  geom_col(data = filter(cts.overall.age, death == -1, ctrltrt == "trt"), aes(x=cond,y=n, fill = ctrltrt), width = 0.25) +
+  geom_text(data = filter(cts.percentdiff.overall.age, death == -1, ctrltrt == "ctrl"),
+            aes(x=cond, y=n, label=paste0(percent_diff,"%")),
+            position=position_dodge(width=0.9),
+            hjust = -.5,
+            size=4) +
+  labs(x="Age groups",y="Attendance Episode")+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_blank(), axis.line = element_line(colour = "black"),
+        legend.position = "none") +
+  scale_fill_brewer(palette = "Set2") +
+  facet_wrap(~as.factor(year), nrow=2) +
+  coord_flip()+
+  scale_y_continuous(labels = scales::unit_format(unit = "k", scale = 1e-3,accuracy = 1),
+                     limits = c(0, 800000))
+
+fig2b2 = ggplot() +
+  geom_col(data = filter(cts.overall.age, death == 1, ctrltrt == "ctrl"), aes(x=cond,y=n, fill = ctrltrt), width = 0.5) +
+  geom_col(data = filter(cts.overall.age, death == 1, ctrltrt == "trt"), aes(x=cond,y=n, fill = ctrltrt), width = 0.25) +
+  geom_text(data = filter(cts.percentdiff.overall.age, death == 1, ctrltrt == "ctrl"),
+            aes(x=cond, y=n, label=paste0(percent_diff,"%")),
+            position=position_dodge(width=0.9),
+            hjust = -1,
+            size=4) +
+  labs(x="Age groups",y="28d Death")+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_blank(), axis.line = element_line(colour = "black"),
+        legend.position = "none") +
+  scale_fill_brewer(palette = "Set2") +
+  facet_wrap(~as.factor(year), nrow=2) +
+  coord_flip() +
+  scale_y_continuous(labels = scales::unit_format(unit = "k", scale = 1e-3,accuracy = 1),
+                     limits = c(0, 40000))
+
+f2b = fig2b1 / fig2b2
+f2b
+write_xlsx(cts.percentdiff.overall.age %>%
+            filter(ctrltrt == "ctrl") %>%
+            select(-ctrltrt),
+          "./results/YoY attn and death change across age groups.xlsx")
+
+```
+
+# fig2c 2SLS
+
+```{r}
+daily = selected %>% group_by(cond) %>% count(eventdate,death) %>% 
+  pivot_wider(names_from=death,names_glue="death_{death}",values_from=n,values_fill=0) %>%
+  mutate(attn=death_0+death_1) %>%
+  rename(death=death_1) %>%
+  select(-death_0) %>%
+  # mutate year and t, number of calendar days since 1st Jan
+  mutate(Year=year(eventdate)-2016,
+         t=yday(eventdate),
+         time_lag = 0) %>%
+  drop_na()
+
+# merge with wave settings
+wave.df <- import_waves(twosls=T)
+date.df <- import_dates(wave.df=wave.df, 
+                        start = min(selected$eventdate), 
+                        end=max(selected$eventdate))
+# impute 2016-2019 wave_num as 0 and after-wave for 2020 and 2021 periods after waves
+date.df = date.df %>% 
+  mutate(wave_num = ifelse(year<=2019, 0, wave_num)) %>%
+  # after-wave periods
+  mutate(wave_num = ifelse(is.na(wave_num),"after-wave",wave_num))
+
+
+daily = daily %>% merge(x=., y=date.df, by.x="eventdate", by.y="date")
+
+
+
+
+daily.w.timelag = daily = daily %>% filter(cond %in% c("65+ & M","65+ & F",
+                                              "55-64 & M","55-64 & F",
+                                              "45-54 & M","45-54 & F")) %>% 
+  # this group_by allows time_lag imputation by condition groups
+  group_by(cond)
+
+# introduce time lag of death counts
+
+time_lag_vector = c(1:14)
+for(i in time_lag_vector){
+   daily.w.timelag = bind_rows(daily.w.timelag, 
+                               daily %>% mutate(death = lead(death, i),
+                                        time_lag = i))
+}
+```
+
+# partial f-statistics
+
+```{r}
+model_full = lm(attn~wave_num + Year + t + I(t^2) + I(t^3), data = daily %>% filter(time_lag == 0,
+                                                       cond == "65+ & M"))
+model_reduced = lm(attn~Year + t + I(t^2) + I(t^3), data = daily %>% filter(time_lag == 0,
+                                                       cond == "65+ & M"))
+result = anova(model_full, model_reduced)
+
+```
+
+# 2SLS
+
+```{r}
+
+ivreg_models_orig = daily.w.timelag %>% drop_na() %>% 
+  # introduce time lag
+  # 2SLS per condition and time_lag
+  group_by(cond,time_lag) %>% 
+  do(ivmodels = broom::tidy(ivreg::ivreg(death ~ attn + Year + t + I(t^2) + I(t^3)| wave_num + Year + t + I(t^2) + I(t^3), data = .),
+                     conf.int = T, conf.level = 0.95)) %>%
+  unnest(ivmodels) 
+
+# save coefficients for prediction graph
+ivreg_models_pred = ivreg_models_orig %>%
+  filter(time_lag == 0, cond %in% c("65+ & M", "65+ & F")) %>%
+  select(cond, term, estimate)
+# write.xlsx(as.data.frame(ivreg_models_pred),file="./results/2sls_allcoef_forpredonly.xlsx",row.names=F)
+
+ivreg_models = ivreg_models_orig %>%
+  filter(term == "attn")
+
+# (optional) save xlsx of attn coefficient numerics
+ivreg_models_xlsx = ivreg_models %>% mutate(estimate = signif(-100* estimate,3),
+                                       conf.low = signif(-100 * conf.low, 3),
+                                       conf.high = signif(-100* conf.high,3)) %>%
+  filter(cond == "65+") %>%
+  select(gender, time_lag, estimate, conf.low, conf.high)
+write_xlsx(as.data.frame(ivreg_models_xlsx),path="./results/2sls_attn_2016_2021.xlsx")
+
+# impute gender
+ivreg_models = ivreg_models %>% mutate(gender = ifelse(grepl("M",cond),"M","F"),
+                                       cond = str_sub(cond,1,-5))
+
+f2c = ggplot(data=ivreg_models) +
+  geom_line(aes(x=time_lag,y=-estimate * 100,col= gender)) +
+  geom_ribbon(aes(x=time_lag,
+                  y=-estimate * 100,
+                  ymin=-conf.high * 100,
+                  ymax=-conf.low * 100,
+                  fill= gender),alpha=0.2,show.legend = F) +
+  facet_wrap(~cond, nrow=1) +
+  labs(x="Time Lag (Days)",
+       y="Estimated Excess 28d Death\nPer 100 Reduced ED Visits",
+       col="Gender") +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_blank(), axis.line = element_line(colour = "black"),
+        plot.margin = margin(0,0,0,.5, "cm")) +
+  theme(legend.position = "bottom") +
+  geom_hline(yintercept = 0)
+
+ggsave(plot=f2c,file=file.path(plot_dir, "fig2c_raw.svg"),width=7,height=3.5)
+# write_xlsx(as.data.frame(ivreg_models),path="./results/2sls_2021.xlsx")
+```
+
+
+
+```{r}
+design <- 
+"ABBDDD
+CCCDDD
+EEEDDD
+"
+
+
+f2 = ( 
+        f2a.left + theme(legend.position = "none", axis.title.x = element_blank()) + 
+                labs(y = "Seasonally-Adjusted\nAttendance Change %") 
+        + f2a.middle + theme(legend.position = "none", 
+                            # axis.text.y = element_blank(),
+                            # axis.line.y = element_blank(),
+                            # axis.ticks.y = element_blank(),
+                            axis.title.y = element_blank()
+                            )
+        + f2a.right + theme(legend.position = "bottom", 
+                            # axis.text.y = element_blank(),
+                            # axis.line.y = element_blank(),
+                            # axis.ticks.y = element_blank(),
+                            axis.title.y = element_blank()
+                            )
+        + f2b + coord_flip()
+        + f2c + theme(legend.position = "bottom")
+        + patchwork::plot_layout(design = design)
+        + patchwork::plot_annotation(tag_levels = list(c("A", "", "", "B", "","C")))
+        )
+
+f2 & theme(text = element_text(size = 12.5))
+ggsave(plot=f2 & theme(text = element_text(size = 12.5)), file=file.path(plot_dir,"fig2_raw.svg"), height = 9, width = 11.693)
+```
+
+
+

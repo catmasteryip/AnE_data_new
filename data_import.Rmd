@@ -1,0 +1,135 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+# import library
+
+```{r}
+library(here)
+library("readxl")
+library(dplyr)
+library(lubridate)
+library(stringr)
+library(parallel)
+```
+
+# pre-process helper
+
+```{r}
+pre_process = function(xlsx_dir){
+        #' Pre-process xlsx sheet and concat them tgt
+        #' 
+        #' @param xlsx_dir. directory to the folder of .xlsx files
+  
+  # loop over all excel files in the directory
+  filenames = list.files(xlsx_dir)
+  df_csv = c()
+  for (filename in paste0(xlsx_dir,filenames)){
+    df = suppressMessages(read_excel(filename))
+    
+    df_csv = rbind(df_csv, df)
+  }
+  df_csv
+}
+```
+
+# pre-process 2015-2021 data
+
+```{r}
+xlsx_dir = paste0(sub("/[^/]+$", "", here()),"/data/2021/")
+# df_csv = pre_process(xlsx_dir)
+
+# parallelized version
+df_csv = suppressWarnings(mclapply(xlsx_dir, pre_process, mc.cores=40))
+df_csv %>% View()
+```
+
+# save raw data as csv
+
+```{r}
+filename = here("AE_Attendance_20210918_20211231.csv")
+write_csv_wrapped = function(arg){
+  df = arg[[1]]
+  destination = arg[[2]]
+  write.csv(df, destination, row.names=F)
+}
+arg = list(list(df_csv,filename))
+mclapply(arg, write_csv_wrapped, mc.cores=40)
+```
+
+
+# import data
+
+```{r}
+source("./scripts/data_import.r")
+df_csv = mclapply(list(filename), read.csv, mc.cores=40)
+df_csv = df_csv[[1]]
+# df.csv = import_csv(filename)
+df_csv %>% colnames()
+```
+
+# 
+
+```{r}
+selected_col = c("Reference.Key",
+                 "AE.Number",
+                 "Sex",
+                 "Admission.Age..Year...episode.based.",
+                 "Date.of.Registered.Death", # need to change to date of arrival if DOA
+                 "Admission.from.OAH..Y.N.", # RCHE status, binary
+                 "Attendance.Date..yyyy.mm.dd.",
+                 "Traumatic.Type",
+                 "Triage.Category",
+                 "Waiting.Time..to.cubicle..Minute.",
+                 "Principal.Diagnosis.Code",
+                 "Diagnosis..rank.2.",
+                 "Diagnosis..rank.3.",
+                 "Diagnosis..rank.4.",
+                 "Diagnosis..rank.5.",
+                 "A.E.to.IP.Ward..Principal.Diagnosis.Code",
+                 "A.E.to.IP.Ward..Diagnosis..rank.2.",
+                 "A.E.to.IP.Ward..Diagnosis..rank.3.",
+                 "A.E.to.IP.Ward..Diagnosis..rank.4.",
+                 "A.E.to.IP.Ward..Diagnosis..rank.5.",
+                 "Discharge.Status..EIS.")
+
+df2 = df_csv %>% select(selected_col) %>%
+  rename(
+  "ReferenceKey" = "Reference.Key",
+  "AENumber" = "AE.Number",
+  "age" = "Admission.Age..Year...episode.based.",
+  "DateofRegisteredDeath" = "Date.of.Registered.Death",
+  "old_home" = "Admission.from.OAH..Y.N.",
+  "eventdate" = "Attendance.Date..yyyy.mm.dd.",
+  "TriageCategory" = "Triage.Category",
+  "WaitingTimetocubicleMinute" = "Waiting.Time..to.cubicle..Minute.",
+  "DischargeStatusEIS" = "Discharge.Status..EIS.",
+  "DR1" = "Principal.Diagnosis.Code",
+  "DR2" = "Diagnosis..rank.2.",
+  "DR3" = "Diagnosis..rank.3.",
+  "DR4" = "Diagnosis..rank.4.",
+  "DR5" = "Diagnosis..rank.5.",
+  "DR6" = "A.E.to.IP.Ward..Principal.Diagnosis.Code",
+  "DR7" = "A.E.to.IP.Ward..Diagnosis..rank.2.",
+  "DR8" = "A.E.to.IP.Ward..Diagnosis..rank.3.",
+  "DR9" = "A.E.to.IP.Ward..Diagnosis..rank.4.",
+  "DR10" = "A.E.to.IP.Ward..Diagnosis..rank.5.",
+) %>%
+  mutate(Sex_num = ifelse(Sex == "M", 1, 0),
+         doadba = ifelse(DischargeStatusEIS==10 | DischargeStatusEIS==11, 1, 0), # doa/dba col
+         DateofRegisteredDeath = ifelse(doadba==1, eventdate, DateofRegisteredDeath),
+         DateofRegisteredDeath = as.Date(DateofRegisteredDeath),
+         eventdate = as.Date(eventdate),
+         death = ifelse(!is.na(DateofRegisteredDeath),1,0)) %>%
+  select(-c("DischargeStatusEIS","Sex"))
+```
+
+
+# save transformed data as csv
+
+```{r}
+filename = here("AE_Attendance_transformed_20210918_20211231.csv")
+arg = list(list(df2,filename))
+mclapply(arg, write_csv_wrapped, mc.cores=40)
+```

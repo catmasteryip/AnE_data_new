@@ -1,0 +1,211 @@
+---
+title: "supplementary tables"
+output: html_notebook
+---
+
+# libraries
+```{r}
+library(tidyverse)
+library(lubridate) # wrangling with dates
+library(scales) # vectors and colour scaling
+library(icd) # icd codes and comorbidities
+library(haven)
+# library(xlsx)
+library(import) # namespace handling
+```
+
+
+# load
+```{r}
+# load modules
+source("./scripts/import.R")
+source("./scripts/data_import.R")
+source("./scripts/icd.R")
+source("./scripts/eda.R") # import the compare_19vs20 routine
+
+# set input/output directory
+data_dir <- "./data"
+results_dir <- "./results"
+if (!dir.exists(results_dir)) dir.create(results_dir)
+```
+
+# import
+```{r}
+### attendance records from stata file
+stata = mclapply(list("AE_Attendance_transformed_20150101_20210917.csv"), import_csv, mc.cores=40)
+
+stata = stata %>%
+  mutate(year = lubridate::year(eventdate),
+         eventdate = as.Date(eventdate)) %>% 
+  filter(eventdate<max(eventdate)-28,
+         year != 2015)
+
+```
+
+# age and gender yearly attendance
+
+```{r}
+# age and gender filtering conditions 
+demo_conditions = c("age>= 65 & Sex_num == 1","age >= 65 & Sex_num == 0",
+                    "age>=55 & age<65 & Sex_num==1","age>=55 & age<65 & Sex_num==0",
+                    "age>=45 & age <55 & Sex_num==1","age>=45 & age <55 & Sex_num==0",
+                  "age>=35 & age <45 & Sex_num==1","age>=35 & age <45 & Sex_num==0",
+                    "age>=18 & age <35 & Sex_num==1","age>=18 & age <35 & Sex_num==0",
+                    "age>=0 & age <18 & Sex_num==1","age>=0 & age <18 & Sex_num==0")
+# age and gender filtering conditions in readable form
+demo_conditionsTextual = c("65+ & M","65+ & F",
+                           "55-64 & M","55-64 & F",
+                           "45-54 & M","45-54 & F",
+                           "35-44 & M","35-44 & F",
+                           "18-34 & M","18-34 & F",
+                           "0-17 & M","0-17 & F")
+# concat strings in dplyr-readable form
+conditions = paste(paste0(demo_conditions,"~\"",demo_conditionsTextual,"\";"),collapse ='')
+
+df = stata %>% 
+  select(eventdate, year, death, age, Sex_num) %>%
+  mutate(cond=case_when(
+    !!! rlang::parse_exprs(conditions)
+  ))
+
+results = compare_yearly(df, dates.2021 = dates.2021) 
+
+age_gender_attn = results[[2]] %>% 
+  filter(ctrltrt == "ctrl", death==-1) %>% 
+  select(-ctrltrt, -death) %>%
+  arrange(year) 
+write_xlsx(age_gender_attn, path = file.path(results_dir,"age_gender_attn.xlsx"))
+```
+
+# define wave dates date.df
+
+```{r}
+# merge with wave settings
+wave.df <- import_waves(twosls = T)
+date.df <- import_dates(wave.df=wave.df, 
+                        start = min(selected$eventdate), 
+                        end=max(selected$eventdate))
+# impute after-wave periods
+date.df = date.df %>%
+  mutate(wave_num = ifelse(is.na(wave_num) & date>min(wave.df$start),"after-wave",wave_num))%>%
+  mutate(wave_num = ifelse(date<min(wave.df$start),0,wave_num))
+```
+
+# age and gender wave/non-wave attendance 
+
+```{r}
+df = stata %>% 
+  select(eventdate, year, death, age, Sex_num) %>%
+  mutate(cond=case_when(
+    !!! rlang::parse_exprs(conditions)
+  ))
+
+results = compare_waves(df = df, date.df = date.df)
+age_gender_attn_wave = results %>% 
+  filter(!is.na(wave_num)) %>%
+  select(-attn.y)
+age_gender_attn_wave
+write_xlsx(age_gender_attn_wave, path = file.path(results_dir,"age_gender_wave_attn.xlsx"))
+```
+
+# 65+ RCHE/non-RCHE Wave/non-wave attendance
+
+```{r}
+
+# age and gender filtering conditions 
+demo_conditions = c("age>= 65 & old_home == \"Y\"","age >= 65 & old_home == \"N\"")
+# age and gender filtering conditions in readable form
+demo_conditionsTextual = c("65+ RCHE","65+ non-RCHE")
+# concat strings in dplyr-readable form
+conditions = paste(paste0(demo_conditions,"~\"",demo_conditionsTextual,"\";"),collapse ='')
+
+df = stata %>% 
+  select(eventdate, year, death, age, old_home) %>%
+  mutate(cond=case_when(
+    !!! rlang::parse_exprs(conditions)
+  )) %>%
+  filter(!is.na(cond))
+  
+results = compare_waves(df = df, date.df = date.df)
+results
+rche_attn_wave = results %>% 
+  filter(!is.na(wave_num) | wave_num != 0) %>%
+  select(-attn.y)
+rche_attn_wave 
+write_xlsx(rche_attn_wave, path = file.path(results_dir,"rche_attn_wave.xlsx"))
+```
+
+# 65+ DOA/DBA Wave/non-wave deaths
+
+```{r}
+# get wave 5 aka 2021 wave 4 dates; OR
+# get waves 1-4 aka 2020 wave 1-4 dates
+wave.dates <- import_waves() %>% 
+  filter(year == 2020) %>%
+  import_dates() %>%
+  filter(wave_num %in% c(1,2,3,4),
+         year==2020) %>%
+  mutate(date = yday(date)) %>%
+  pull(date)
+
+df = stata %>%
+  filter(age >= 65, 
+         year < 2021) %>%
+  select(old_home, year, eventdate, death, doadba) %>%
+  mutate(demographic = ifelse(yday(eventdate) %in% wave.dates, "2020 Wave", "2020 Non-wave"))
+
+results = compare_yearly(df = df, group.by = c("doadba", "demographic"), trtyrs = c(2020))
+wave_elderly_df = results [[2]] %>% 
+  filter(ctrltrt == "ctrl",
+         death==1) %>%
+  select(-ctrltrt, -death)
+wave_elderly_df
+write_xlsx(wave_elderly_df, path = "./results/wave_elderly_doadba_20.xlsx")
+```
+
+
+# 65+ DOA/DBA RCHE/non-RCHE deaths
+
+```{r}
+
+df = stata %>%
+  filter(age >= 65) %>%
+  select(old_home, year, eventdate, death, doadba) 
+results = compare_yearly(df, group.by = c("doadba", "old_home"), dates.2021 = dates.2021)
+rche_df = results [[2]] %>% 
+  filter(ctrltrt == "ctrl",
+         death==1) %>%
+  select(-ctrltrt, -death)
+write_xlsx(rche_df, path = "./results/rche_doadba.xlsx")
+```
+
+# 65+ M&F time lag estimated excess death
+
+```{r}
+# 2021 vs 2019
+tabs7 = ivreg_models %>% filter(cond == "65+", gender =="F") %>% mutate(estimate = -estimate * 20585,
+                                                                conf.high = -conf.high * 20585,
+                                                                conf.low = -conf.low * 20585)
+tabs7 = bind_rows(tabs7, ivreg_models %>% filter(cond == "65+", gender =="M") %>% mutate(estimate = -estimate * 17016,
+                                                                conf.high = -conf.high * 17016,
+                                                                conf.low = -conf.low * 17016))
+tabs7 = tabs7 %>% 
+  select(time_lag, gender, estimate, conf.low, conf.high) %>%
+  mutate_if(is.numeric, funs(signif(.,3))) %>%
+  mutate(year=2021)
+# 2020 vs 2019
+tabs7.19 = ivreg_models %>% filter(cond == "65+", gender =="F") %>% mutate(estimate = -estimate * 84163,
+                                                                conf.high = -conf.high * 84163,
+                                                                conf.low = -conf.low * 84163)
+tabs7.19 = bind_rows(tabs7.19, ivreg_models %>% filter(cond == "65+", gender =="M") %>% mutate(estimate = -estimate * 61957,
+                                                                conf.high = -conf.high * 61957,
+                                                                conf.low = -conf.low * 61957))
+tabs7.19 = tabs7.19 %>%
+  select(time_lag, gender, estimate, conf.low, conf.high) %>%
+  mutate_if(is.numeric, funs(signif(.,3))) %>%
+  mutate(year=2020)
+
+tabs7 = bind_rows(tabs7, tabs7.19)
+write.xlsx(tabs7, file = file.path(results_dir, "65plus_excess_death_absestimate.xlsx"))
+```
+

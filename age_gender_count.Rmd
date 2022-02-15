@@ -1,0 +1,199 @@
+---
+title: "Age and gender count data"
+output: pdf_document
+---
+
+# import libraries
+
+```{r}
+library(haven) 
+library(lubridate)
+# library("readxl")
+# library(xlsx)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(stringr)
+# library(RColorBrewer)
+library(ivreg)
+library(broom)
+library(generics)
+library(here)
+
+# prevent masking
+rename = dplyr::rename
+select = dplyr::select
+summarise = dplyr::summarise
+filter = dplyr::filter
+```
+
+# import scripts
+
+```{r}
+
+working_dir = here()
+script_dir = here('scripts')
+plot_dir = here("viz")
+csv_dir = here('data')
+# paths = c("fear_index.R","conditions_setting.R","data_import.R")
+for( path in paths){
+  source(file.path(script_dir, path))
+}
+```
+
+# import dataset and subsetting
+
+```{r}
+# get dataset
+original <- import_stata(dir=csv_dir, up_to="2021")
+
+# name changing
+original =  original %>% 
+  rename(age=AdmissionAgeYearepisodeba) 
+
+# select columns
+selected_columns = c('eventdate',"DateofRegisteredDeath","age","Sex_num","death","censor","old_home")
+
+# subset dataset
+selected = original %>% select(selected_columns)
+```
+
+# Impute filtering condition info, group by age and gender
+
+```{r}
+
+# age and gender filtering conditions 
+demo_conditions = c("age>= 65 & Sex_num == 1","age >= 65 & Sex_num == 0",
+                    "age>=55 & age<65 & Sex_num==1","age>=55 & age<65 & Sex_num==0",
+                    "age>=45 & age <55 & Sex_num==1","age>=45 & age <55 & Sex_num==0",
+                  "age>=35 & age <45 & Sex_num==1","age>=35 & age <45 & Sex_num==0",
+                    "age>=18 & age <35 & Sex_num==1","age>=18 & age <35 & Sex_num==0",
+                    "age>=0 & age <18 & Sex_num==1","age>=0 & age <18 & Sex_num==0")
+# age and gender filtering conditions in readable form
+demo_conditionsTextual = c("65+ & M","65+ & F",
+                           "55-64 & M","55-64 & F",
+                           "45-54 & M","45-54 & F",
+                           "35-44 & M","35-44 & F",
+                           "18-34 & M","18-34 & F",
+                           "0-17 & M","0-17 & F")
+# concat strings in dplyr-readable form
+conditions = paste(paste0(demo_conditions,"~\"",demo_conditionsTextual,"\";"),collapse ='')
+
+selected = selected %>% 
+  mutate(cond=case_when(
+    !!! rlang::parse_exprs(conditions)
+  ))
+```
+
+# Count data table of age and gender attn
+
+```{r}
+attn.age.gender = selected %>% 
+  group_by(cond) %>% 
+  compare_192021() %>% 
+  simplify_yearlycomparison()
+attn.age.gender
+```
+
+# Count data table of age and gender death
+
+```{r}
+death.age.gender = selected %>% 
+  filter(death==1) %>%
+  group_by(cond) %>% 
+  compare_192021() %>% 
+  simplify_yearlycomparison()
+death.age.gender
+```
+
+# Count data of 65+ RCHE attn
+
+```{r}
+plus65.attn = selected %>% 
+  filter(age>65,old_home==1) %>%
+  compare_192021() %>% 
+  simplify_yearlycomparison()
+plus65.attn
+```
+
+# Count data of 65+ RCHE death
+
+```{r}
+selected %>% filter(death==1) %>% count(age>65,old_home==1,Year=year(eventdate)) %>% pivot_wider(names_from = "Year", names_glue="n{Year}", values_from = "n") %>% mutate(percent_diff = signif((n2020/n2019-1)*100,3))
+```
+
+# Count data of 65+ RCHE among waves
+
+```{r}
+daily = selected %>% filter(age>65) %>% count(old_home,eventdate,death) %>% 
+  pivot_wider(names_from=death,names_glue="death_{death}",values_from=n,values_fill=0) %>%
+  mutate(attn=death_0+death_1) %>%
+  rename(death=death_1) %>%
+  select(-death_0) %>%
+  # mutate year and t, number of calendar days since 1st Jan
+  mutate(Year=year(eventdate)-2019,
+         t=ifelse(year(eventdate)==2020,
+                  eventdate-as.Date("2020-01-01"),
+                  eventdate-as.Date("2019-01-01")),
+         time_lag = 0) %>%
+  filter(eventdate!=as.Date("2020-02-29")) %>%
+  drop_na()
+
+# merge with wave settings
+daily = daily %>% merge(x=., y=wavePandemicHkIndex.1920, by.x="eventdate", by.y="eventdate")
+daily %>% 
+  filter(waveFactor != "0") %>% 
+  group_by(old_home,waveFactor,Year=year(eventdate)) %>% 
+  summarise(attn=sum(attn)) %>% 
+  pivot_wider(names_from = "Year", names_glue="n{Year}", values_from = "attn") %>% 
+  mutate(attn_percent_diff = signif((n2020/n2019-1)*100,3))
+```
+
+
+# Count data of 65+ 28-day death by DOA/DBA among waves
+
+```{r}
+daily = original %>% filter(age>65) %>% count(doa = destination_num==4,eventdate,death) %>% 
+  pivot_wider(names_from=death,names_glue="death_{death}",values_from=n,values_fill=0) %>%
+  mutate(attn=death_0+death_1) %>%
+  rename(death=death_1) %>%
+  select(-death_0) %>%
+  # mutate year and t, number of calendar days since 1st Jan
+  mutate(Year=year(eventdate),
+         t=ifelse(year(eventdate)==2020,
+                  eventdate-as.Date("2020-01-01"),
+                  eventdate-as.Date("2019-01-01")),
+         time_lag = 0) %>%
+  filter(eventdate!=as.Date("2020-02-29")) %>%
+  drop_na()
+
+# merge with wave settings
+daily = daily %>% merge(x=., y=wavePandemicHkIndex.1920, by.x="eventdate", by.y="eventdate")
+
+# group by in-wave or out-of-wave periods
+daily %>% 
+  group_by(doa,During_wave = waveFactor %in% c("1","2","3","4"),Year) %>% 
+  summarise(death=sum(death)) %>%
+  pivot_wider(names_from = "Year", names_glue="n{Year}", values_from = "death") %>% 
+  mutate(death_diff = n2020-n2019,
+         death_percent_diff = signif((n2020/n2019-1)*100,3))
+```
+
+# Count data of 65+ DOA/DBA death YoY
+
+```{r}
+original %>% 
+  filter(age>65,death==1) %>% 
+  group_by(doa=destination_num==4) %>%
+  compare_192021() %>% 
+  simplify_yearlycomparison()
+```
+
+
+# Count data of 65+ death YoY
+
+```{r}
+original %>% filter(age>65,death==1) %>%
+  compare_192021() %>% 
+  simplify_yearlycomparison()
+```

@@ -1,0 +1,159 @@
+---
+title: "65+ RCHE attn reduction and DOA/DBA bar chart"
+output: pdf
+---
+
+# import libraries
+
+```{r}
+library(haven) 
+library(lubridate)
+library(here)
+# library(xlsx)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(stringr)
+library(RColorBrewer)
+library(ivreg)
+library(generics)
+library(patchwork)
+
+# prevent masking
+rename = dplyr::rename
+select = dplyr::select
+summarise = dplyr::summarise
+filter = dplyr::filter
+```
+
+# import scripts
+
+```{r}
+
+working_dir = here()
+script_dir = here('scripts')
+csv_dir = here('data')
+plot_dir = here('plots')
+paths = c("fear_index.R","conditions_setting.R","data_import.R","import.R")
+for( path in paths){
+  source(here(script_dir, path))
+}
+```
+
+# import dataset and subsetting
+
+```{r}
+# get dataset
+stata = mclapply(list("AE_Attendance_transformed_20150101_20210917.csv"), import_csv, mc.cores=40)
+stata = stata[[1]]
+
+# select columns
+selected_columns = c('eventdate',"DateofRegisteredDeath","age","Sex_num","death","old_home","doadba")
+
+# subset dataset
+selected = stata %>% 
+  select(selected_columns) %>%
+  mutate(old_home = ifelse(old_home == "Y", 1, 0))
+  # # (optional) discard last 28-day data 
+  # filter(eventdate<max(eventdate)-28)
+
+selected = selected %>% 
+  mutate(eventdate = as.Date(eventdate)) 
+```
+
+# Impute filtering condition info, group by 65+ RCHE status
+
+```{r}
+# age and gender filtering conditions 
+elderly_conditions = c("age>= 65 & old_home == 1","age >= 65 & old_home == 0")
+# age and gender filtering conditions in readable form
+elderly_conditionsTextual = c("65+ RCHE","65+ non-RCHE")
+# concat strings in dplyr-readable form
+elderly_cond = paste(paste0(elderly_conditions,"~\"",elderly_conditionsTextual,"\";"),collapse ='')
+
+selected.elderly = selected %>% 
+  mutate(cond=case_when(
+    !!! rlang::parse_exprs(elderly_cond)
+  ))
+```
+
+# Tallying, turn data into daily attn counts
+
+```{r}
+
+# merge with wave settings
+wave.df <- import_waves(twosls = T)
+date.df <- import_dates(wave.df=wave.df, end=max(ymd(selected$eventdate))) 
+# impute 2021 after-wave periods
+date.df = date.df %>%
+  mutate(wave_num = ifelse(is.na(wave_num) & date>min(wave.df$start),"after-wave",wave_num))%>%
+  mutate(wave_num = ifelse(date<min(wave.df$start),0,wave_num))
+
+attn.reduction.elderly = compare_waves(selected.elderly, date.df) %>%
+  filter(!is.na(wave_num))
+```
+
+# ggplot attn reduction
+
+```{r}
+fig4a =
+  ggplot() +
+  geom_line(data=attn.reduction.elderly %>% 
+              filter(cond=="65+ RCHE",!wave_num %in% c("after-wave","0")),
+            aes(x=wave_num,y=percent_diff,group=1,col=cond)) +
+  geom_line(data=attn.reduction.elderly %>% 
+              filter(cond=="65+ non-RCHE",!wave_num %in% c("after-wave","0")),
+            aes(x=wave_num,y=percent_diff,group=1,col=cond)) +
+  geom_hline(data=attn.reduction.elderly %>% 
+               filter(cond=="65+ RCHE",wave_num=="after-wave"),
+             aes(yintercept=percent_diff,col=cond),linetype="dashed") +
+  geom_hline(data=attn.reduction.elderly %>% 
+               filter(cond=="65+ non-RCHE",wave_num=="after-wave"),
+             aes(yintercept=percent_diff,group=1,col=cond),linetype="dashed") +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  labs(x="Wave Period",y="Seasonally Adjusted Attendance Change %",col="") +
+  theme(legend.position = "bottom") +
+  geom_hline(yintercept = 0) +
+  scale_color_brewer(palette = "Set2") 
+fig4a
+# write.csv(attn.reduction, file = here("results","65plus RCHE wave attn.csv"))
+```
+
+# ggplot of 65+ RCHE death
+
+```{r}
+results = compare_yearly(selected.elderly %>%
+                              mutate(year = year(eventdate)) %>%
+                              filter(!is.na(cond)),
+                              group.by = c("doadba"))
+
+diff.yearly.elderly = results[[2]] %>%
+  filter(death==1,
+         ctrltrt == "ctrl") %>%
+  mutate(doadba = ifelse(doadba==1, "DOA/DBA", "non-DOA/DBA"),
+         RCHE = cond,
+         cond = paste(cond, doadba, collapse = "\n"))
+  
+fig4b = ggplot(diff.yearly.elderly) +
+  geom_col(aes(x=cond, y=abs_diff, fill=RCHE)) +
+  geom_text(aes(x=cond, y=abs_diff, label=paste0(percent_diff,"%")),
+            position=position_dodge(width=0.9),
+            hjust = -0.1,
+            size=4) +
+  ylim(0,1500)+
+  scale_fill_brewer(palette = "Set2") +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  labs(x="",y="65+ ED 28d Mortality\nSeasonally Adjusted Change") +
+  theme(legend.position = "") +
+  coord_flip() +
+  facet_wrap(~year, nrow=2)
+
+fig4b
+
+fig4 = fig4a + fig4b + patchwork::plot_annotation(tag_levels = list(c("A", "B")))
+fig4
+ggsave(plot=fig4, file=file.path(plot_dir,"fig4_raw.svg"),width=10,height=5)
+write_xlsx(diff.yearly.elderly, here("results","YoY change in 65plus RCHE DOADBA.xlsx"))
+```
