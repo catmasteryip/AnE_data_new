@@ -68,13 +68,13 @@ df = stata %>%
     !!! rlang::parse_exprs(conditions)
   ))
 
-results = compare_yearly(df, dates.2021 = dates.2021) 
+results = compare_yearly(df) 
 
 age_gender_attn = results[[2]] %>% 
   filter(ctrltrt == "ctrl", death==-1) %>% 
   select(-ctrltrt, -death) %>%
   arrange(year) 
-write_xlsx(age_gender_attn, path = file.path(results_dir,"age_gender_attn.xlsx"))
+write_xlsx(age_gender_attn, path = file.path("./results/age_gender_attn.xlsx"))
 ```
 
 # define wave dates date.df
@@ -135,32 +135,33 @@ rche_attn_wave
 write_xlsx(rche_attn_wave, path = file.path(results_dir,"rche_attn_wave.xlsx"))
 ```
 
+
 # 65+ DOA/DBA Wave/non-wave deaths
 
 ```{r}
 # get wave 5 aka 2021 wave 4 dates; OR
 # get waves 1-4 aka 2020 wave 1-4 dates
 wave.dates <- import_waves() %>% 
-  filter(year == 2020) %>%
-  import_dates() %>%
-  filter(wave_num %in% c(1,2,3,4),
-         year==2020) %>%
+  filter(year == 2021) %>%
+  import_dates()  %>% 
+  filter(!is.na(wave_num),
+         year == 2021) %>%
   mutate(date = yday(date)) %>%
   pull(date)
 
 df = stata %>%
   filter(age >= 65, 
-         year < 2021) %>%
+         year != 2020) %>%
   select(old_home, year, eventdate, death, doadba) %>%
-  mutate(demographic = ifelse(yday(eventdate) %in% wave.dates, "2020 Wave", "2020 Non-wave"))
+  mutate(demographic = ifelse(yday(eventdate) %in% wave.dates, "2021 Wave", "2021 Non-wave"))
 
-results = compare_yearly(df = df, group.by = c("doadba", "demographic"), trtyrs = c(2020))
+results = compare_yearly(df = df, group.by = c("doadba", "demographic"), trtyrs = c(2021))
 wave_elderly_df = results [[2]] %>% 
   filter(ctrltrt == "ctrl",
          death==1) %>%
   select(-ctrltrt, -death)
 wave_elderly_df
-write_xlsx(wave_elderly_df, path = "./results/wave_elderly_doadba_20.xlsx")
+write_xlsx(wave_elderly_df, path = "./results/wave_elderly_doadba_21.xlsx")
 ```
 
 

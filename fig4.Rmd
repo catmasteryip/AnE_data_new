@@ -6,7 +6,7 @@ output: pdf
 # import libraries
 
 ```{r}
-library(haven) 
+# library(haven) 
 library(lubridate)
 library(here)
 # library(xlsx)
@@ -126,14 +126,14 @@ fig4a
 results = compare_yearly(selected.elderly %>%
                               mutate(year = year(eventdate)) %>%
                               filter(!is.na(cond)),
-                              group.by = c("doadba"))
+                              group.by = c("doadba", "cond"))
 
 diff.yearly.elderly = results[[2]] %>%
   filter(death==1,
          ctrltrt == "ctrl") %>%
   mutate(doadba = ifelse(doadba==1, "DOA/DBA", "non-DOA/DBA"),
          RCHE = cond,
-         cond = paste(cond, doadba, collapse = "\n"))
+         cond = paste(RCHE, doadba, sep = "\n"))
   
 fig4b = ggplot(diff.yearly.elderly) +
   geom_col(aes(x=cond, y=abs_diff, fill=RCHE)) +
@@ -154,6 +154,6 @@ fig4b
 
 fig4 = fig4a + fig4b + patchwork::plot_annotation(tag_levels = list(c("A", "B")))
 fig4
-ggsave(plot=fig4, file=file.path(plot_dir,"fig4_raw.svg"),width=10,height=5)
+ggsave(plot=fig4, file=file.path(out_dir,"fig4_raw.svg"),width=10,height=5)
 write_xlsx(diff.yearly.elderly, here("results","YoY change in 65plus RCHE DOADBA.xlsx"))
 ```

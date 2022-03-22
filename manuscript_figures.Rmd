@@ -799,7 +799,7 @@ figF2 <- (
 
 figS1 = (figE1+figE2+figF1+figF2 +
   plot_layout(ncol = 2, 
-              widths = c(1,1.6,1,1.6))) &
+              widths = c(1,2,1,2))) &
   theme(
                 legend.position = "bottom",
                 panel.grid.major = element_blank(),

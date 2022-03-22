@@ -9,7 +9,7 @@ library(tidyverse)
 library(lubridate) # wrangling with dates
 library(scales) # vectors and colour scaling
 library(icd) # icd codes and comorbidities
-library(haven)
+# library(haven)
 library(import) # namespace handling
 # library(xlsx)
 library(patchwork)

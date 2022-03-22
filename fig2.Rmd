@@ -6,7 +6,7 @@ output: pdf_document
 # import libraries
 
 ```{r}
-library(haven) 
+library(writexl)
 library(lubridate)
 library(here)
 library(parallel)
@@ -37,8 +37,8 @@ source("./scripts/data_import.r")
 
 ```{r}
 # get dataset
-stata = mclapply(list("AE_Attendance_transformed_20150101_20210917.csv"), import_csv, mc.cores=40)
-stata = stata[[1]]
+# stata = mclapply(list("AE_Attendance_transformed_20150101_20210917.csv"), import_csv, mc.cores=40)
+# stata = stata[[1]]
 
 # select columns
 selected_columns = c('eventdate',"DateofRegisteredDeath","age","Sex_num","death","old_home")
@@ -49,9 +49,9 @@ selected = stata %>%
 
 selected = selected %>% 
   mutate(eventdate = as.Date(eventdate)) %>%
-  filter(year(eventdate)!=2015) %>%
+  filter(year(eventdate)!=2015) 
   # # (optional) discard last 28-day data 
-  filter(eventdate<max(eventdate)-28)
+  # %>% filter(eventdate<max(eventdate)-28)
 
 max(selected$eventdate)
 ```
@@ -185,10 +185,10 @@ fig2b1 =
 fig2b2 = ggplot() +
   geom_col(data = filter(cts.overall.age, death == 1, ctrltrt == "ctrl"), aes(x=cond,y=n, fill = ctrltrt), width = 0.5) +
   geom_col(data = filter(cts.overall.age, death == 1, ctrltrt == "trt"), aes(x=cond,y=n, fill = ctrltrt), width = 0.25) +
-  geom_text(data = filter(cts.percentdiff.overall.age, death == 1, ctrltrt == "ctrl"),
+  geom_text(data = filter(cts.percentdiff.overall.age, death == 1, ctrltrt == "trt"),
             aes(x=cond, y=n, label=paste0(percent_diff,"%")),
             position=position_dodge(width=0.9),
-            hjust = -1,
+            hjust = -.5,
             size=4) +
   labs(x="Age groups",y="28d Death")+
   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
@@ -264,7 +264,7 @@ model_full = lm(attn~wave_num + Year + t + I(t^2) + I(t^3), data = daily %>% fil
 model_reduced = lm(attn~Year + t + I(t^2) + I(t^3), data = daily %>% filter(time_lag == 0,
                                                        cond == "65+ & M"))
 result = anova(model_full, model_reduced)
-
+result
 ```
 
 # 2SLS
@@ -288,13 +288,6 @@ ivreg_models_pred = ivreg_models_orig %>%
 ivreg_models = ivreg_models_orig %>%
   filter(term == "attn")
 
-# (optional) save xlsx of attn coefficient numerics
-ivreg_models_xlsx = ivreg_models %>% mutate(estimate = signif(-100* estimate,3),
-                                       conf.low = signif(-100 * conf.low, 3),
-                                       conf.high = signif(-100* conf.high,3)) %>%
-  filter(cond == "65+") %>%
-  select(gender, time_lag, estimate, conf.low, conf.high)
-write_xlsx(as.data.frame(ivreg_models_xlsx),path="./results/2sls_attn_2016_2021.xlsx")
 
 # impute gender
 ivreg_models = ivreg_models %>% mutate(gender = ifelse(grepl("M",cond),"M","F"),
@@ -317,8 +310,17 @@ f2c = ggplot(data=ivreg_models) +
   theme(legend.position = "bottom") +
   geom_hline(yintercept = 0)
 
-ggsave(plot=f2c,file=file.path(plot_dir, "fig2c_raw.svg"),width=7,height=3.5)
+ggsave(plot=f2c,file=file.path(out_dir, "fig2c_raw.svg"),width=7,height=3.5)
 # write_xlsx(as.data.frame(ivreg_models),path="./results/2sls_2021.xlsx")
+
+# (optional) save xlsx of attn coefficient numerics
+ivreg_models_xlsx = ivreg_models %>% mutate(estimate = signif(-100* estimate,3),
+                                       conf.low = signif(-100 * conf.low, 3),
+                                       conf.high = signif(-100* conf.high,3)) %>%
+  filter(cond == "65+") %>%
+  select(gender, time_lag, estimate, conf.low, conf.high)
+write_xlsx(as.data.frame(ivreg_models_xlsx),path="./results/2sls_2016_2021.xlsx")
+
 ```
 
 
@@ -353,7 +355,7 @@ f2 = (
         )
 
 f2 & theme(text = element_text(size = 12.5))
-ggsave(plot=f2 & theme(text = element_text(size = 12.5)), file=file.path(plot_dir,"fig2_raw.svg"), height = 9, width = 11.693)
+ggsave(plot=f2 & theme(text = element_text(size = 12.5)), file=file.path(out_dir,"fig2_raw.svg"), height = 9, width = 11.693)
 ```
 
 
