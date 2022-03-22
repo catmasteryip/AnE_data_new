@@ -1,23 +1,3 @@
-# ///// Append features to records ----------------------------------------------------------
-# deprecated
-#' import_and_append <- function(df, features, dir, up_to = c("2020", "2021")) {
-#'         #' Import and append features to the original records stata file
-#'         #'
-#'         #' @param up_to. Character. Either "2020" or "2021", in quotes.
-#'         
-#'         up_to = match.arg(up_to)
-#'         file <- c("2020" = "2019_2020_all_20210312.dta", 
-#'                   "2021" = "2019_2020_2021_all_20210727.dta")
-#'         file <- file[up_to]
-#'         features_to_append <- haven::read_dta(file = file.path(dir, file), 
-#'                                               col_select = all_of(c("AENumber", features)))
-#'         
-#'         df.appended <- left_join(df, features_to_append, by = "AENumber")
-#'         
-#'         return(df.appended)
-#' }
-
-
 # ///// covid and covid deaths ------------------------------------------------
 
 import_covid <- function(dir = NULL) {
@@ -32,6 +12,7 @@ import_covid_deaths <- function(dir = NULL) {
         #' Data source: John Hopkins
         #' The default is to retrieve data from: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series
         #' Local file: "time_series_covid19_deaths_global.csv"
+        #' @param dir. (optional) directory to covid death data .csv. If NULL, will fetch from public github repo
         
         if (is.null(dir)) {
                 github_repo <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series"
@@ -68,6 +49,7 @@ import_HK_covid_data_from_JohnHopkins <- function(data_type = c("deaths", "cases
 
 extract_HK_counts_from_JohnHopkins_cumulative_counts <- function(df) {
         #' Extract Hong Kong counts from cumulative counts spreadsheet from John Hopkins
+        #' helper function, do not delete
         
         filtered <- df %>%
                 filter(`Province/State` == "Hong Kong") %>% 
@@ -143,9 +125,17 @@ import_condf <- function() {
 # ///// Importing waves and dates ----------------------------------------------------
 
 import_dates <- function(wave.df = NULL, 
-                         start = lubridate::ymd('2019-01-01'), 
-                         end =   lubridate::ymd('2021-05-06')
+                         start = lubridate::ymd('2016-01-01'), 
+                         end =   lubridate::ymd('2021-08-19')
                          ) {
+        #' A function to impute dates based on wave.df, 
+        #' only used if wave.df is imputed by setting twosls == F
+        #' 
+        #' @param wave.df. a dataframe containing wave number, start dates and end dates
+        #' @param start. start date of data
+        #' @param end. end date of data
+        #' @return dataframe of date, wave_num, year, month and yday (calendar day)
+        
         if (is.null(wave.df)) wave.df <- import_waves()
         
         # period_vector <- rep(1:53, each = 7)[1:365]
@@ -165,8 +155,11 @@ import_dates <- function(wave.df = NULL,
 
 
 import_waves <- function(day.lag = 0, twosls=F) {
-        #' A function to import the COVID waves in Hong Kong.
-        # one more wave, 2021 wave 5
+        #' A function to impute the year, start and end dates COVID waves in Hong Kong.
+        #' 
+        #' @param day.lag. days of lag to be introduced
+        #' @param twosls. binary variable to choose different wave.df imputation methods
+      
         if(!twosls){
                 wave.df <- tribble(
                         ~ year, ~ wave, ~ start, ~ end,
@@ -200,7 +193,13 @@ import_waves <- function(day.lag = 0, twosls=F) {
         
         return(wave.df)
 }
+
+# deprecated
 import_wavedates2021 = function(df.lastday, out_of_wave = 'non-wave'){
+  #' A function to impute wave dates of 2021
+  #' 
+  #' @param df.lastday. 
+  #' @param out_of_wave. the string to impute non-wave periods, non-wave or after-wave periods
         # impute wave
         wave.df <- import_waves(twosls = T)
         date.df <- import_dates(wave.df=wave.df, end=df.lastday)
@@ -265,18 +264,6 @@ convert_to_facet_label <- function(var) {
         paste0(deparse(substitute(var)), "(", var, ")")
 }
 
-
-# ///// Not used ----------------------------------------------------------------
-
-if (FALSE) {
-        
-        import_covid_AE <- function(dir = NULL) {
-                AE.covid <- read_csv(file.path(dir, "covid_positive_AENumber_list.csv"), col_types = "c") %>% 
-                        pull(1)
-                return(AE.covid)
-        }
-        
-}
 
 import_waves3 <- function(day.lag = 0) {
         #' A function to import the COVID waves in Hong Kong.
@@ -356,167 +343,19 @@ import_waves2 <- function(day.lag = 0) {
         return(waves)
 }
 
-import_calendar <- function() {
-        wave.df <- import_waves3()
-        calendar <- import_dates(wave.df) %>% 
-                left_join(wave.df %>% 
-                                  rename(wave_num = wave) %>% 
-                                  select(year, wave_num, start, end, duration), 
-                          by = c("year", "wave_num"))
-        return(calendar)
-}
-
-add_features_to_calendar <- function(df) {
-        out <- df %>% 
-                mutate(year2020 = year == 2020) %>%
-                mutate(in_wave  = year == 2020 & wave_num %in% c("W1", "W2", "W3", "W4")) %>% 
-                mutate(wave1 = year == 2020 & wave_num == "W1") %>% 
-                mutate(wave2 = year == 2020 & wave_num == "W2") %>% 
-                mutate(wave3 = year == 2020 & wave_num == "W3") %>% 
-                mutate(wave4 = year == 2020 & wave_num == "W4") %>%
-                mutate(daySincePandemic = as.numeric(date - ymd("2020-01-25")) + 1) %>% 
-                mutate(daySincePandemic = ifelse(daySincePandemic < 0, 0, daySincePandemic)) 
-        return(out)
-}
-
-import_icd <- function() {
-        icd9 <-  icd.data::icd9cm_hierarchy %>% mutate(code = as.character(code))
-        icd9
-}
-
-
-# Deprecated routines
-# Replaced by import_stata in data_import.R
-if (FALSE) {
-        import_stata <- function(dir = NULL) {
-                #' Imports the stata files
-                
-                if (is.null(dir)) dir <- "/storage/holab/wongyh/AnE/data"
-                
-                con.df <- import_condf()
-                
-                logtime("Importing AE_pri_dis_all.dta ...")
-                ### imports
-                stata.T1_5.new <- haven::read_dta(file.path(dir, "AE_pri_dis_all.dta"),
-                                                  col_select = c(AENumber, pri_dis, tra_gp))
-                
-                logtime("Importing 2019_2020_all_20210312.dta ...")
-                # this file does not contain 2021 records, the date specifies when it was exported
-                stata <- haven::read_dta(file.path(dir, "2019_2020_all_20210312.dta"))
-                
-                ### joining
-                logtime("Joining ...")
-                stata <- left_join(stata, stata.T1_5.new, by = "AENumber")
-                
-                ### cleaning
-                logtime("Cleaning ...")
-                stata <- stata %>% 
-                        update_sepsis_records(dir) %>% 
-                        # annotate primary dx
-                        left_join(select(con.df, num, conL), by = c("pri_dis" = "num")) %>% 
-                        rename(pri_disL = conL) %>% 
-                        mutate(tra_index = ifelse(tra_gp == 0, 0, 1)) %>%
-                        # parse dates
-                        mutate(DateofRegisteredDeath = lubridate::ymd(DateofRegisteredDeath)) %>% 
-                        mutate(eventdate             = lubridate::ymd(eventdate))
-                
-                # Drop Feb 29
-                stata <- stata %>%
-                        # filter(year != 2021) ### unnecessary because this file does not contain 2021 records
-                        filter(eventdate != "2020-02-29")
-                
-                # de-dup death counts
-                logtime("Deduplicating ... ")
-                stata <- stata %>% annotate_last_record()
-                
-                stata <- stata %>% remove_covid_records()
-                
-                AE.last.visit.Jan21 <- import_last_visit_Jan21(csv_dir)
-                stata <- stata %>% remove_dup_Dec20_death(AE.last.visit.Jan21)
-                
-                logtime("Done")
-                return(stata)
-        }
-        
-        
-        
-        ## helper functions for import_stata ---------------------------------------------
-        update_sepsis_records <- function(stata, dir) {
-                records_sepsis <- haven::read_dta(file.path(dir, "updated_25dis.dta"))
-                stata <- stata %>% 
-                        select(-c(pri_dis, diag)) %>% 
-                        left_join(records_sepsis, by = "AENumber")
-                return(stata)
-        }
-        
-        
-        
-        annotate_last_record <- function(stata, var_name = NULL) {
-                if (is.null(var_name)) var_name <- "death"
-                
-                patientDieList <- stata %>%
-                        ### filter for censor == 1 patients, i.e. they either have
-                        # i. death date within 28-days of their admission OR
-                        # ii. destination_num == 4
-                        filter(censor == 1) %>%
-                        filter(DateofRegisteredDeath - eventdate <= 28 | destination_num == 4) %>%  
-                        ### for each patient,
-                        group_by(ReferenceKey) %>%
-                        ### pick the last record
-                        arrange(eventdate) %>%
-                        summarise(AENumber = dplyr::last(AENumber)) %>% 
-                        ### pull out the AENumber
-                        pull(AENumber)
-                
-                ### For these set of AENumbers, annotate them as "death == 1"
-                stata <- stata %>% 
-                        mutate({{ var_name }} := ifelse(AENumber %in% patientDieList, 1, 0))
-                
-                stata
-        }
-        
-        remove_covid_records <- function(stata) {
-                #' Remove COVID-positive records
-                #' 
-                #' Remove records that have "519.8:8" in the 10 diagnosis columns
-                
-                covid_cols = c("AENumber","AY","AEtoIPWardDiagnosisHAMDCT","BA","BB","BC",
-                               "PrincipalDiagnosisDescription","DiagnosisHAMDCTDescriptionra","BK","BL","BM")
-                covid_subset = stata %>% select(all_of(covid_cols))
-                covid_code = "519.8:8"
-                covid_AENumber_vec = c()
-                for(colname in covid_cols){
-                        covid_AENumber = covid_subset %>% filter(str_detect(eval(parse(text=colname)),covid_code)) %>% pull(AENumber)
-                        covid_AENumber_vec = c(covid_AENumber_vec,covid_AENumber)
-                }
-                covid_AENumber_vec = unique(covid_AENumber_vec)
-                
-                stata_without_covid_records <- stata %>% 
-                        filter(!AENumber %in% covid_AENumber_vec)
-                
-                return(stata_without_covid_records)
-        }
-        
-        import_last_visit_Jan21 <- function(dir) {
-                AE.last.visit.Jan21 <- read.csv(file.path(dir,"Dec20_censor.csv")) %>% 
-                        filter(JanLastAtt==1) %>%
-                        pull(AENumber)
-                return(AE.last.visit.Jan21)
-        }
-        
-        
-        remove_dup_Dec20_death <- function(stata, AE.last.visit.Jan21) {
-                stata <- stata %>% 
-                        mutate(death = ifelse(AENumber %in% AE.last.visit.Jan21 & death==1, 0, death))
-                return(stata)
-        }
-
-}
 
 # yearly comparison of 2020, 2021 against non-covid years avg
 
 
 compare_yearly = function(df, group.by = c("cond"), trtyrs = c(2020,2021), dates.2021 = NA){
+  #' Yearly comparison between each trtyrs, treatment years, against control years, the rest of the years
+  #' 
+  #' @param df. dataframe that contains eventdate, group.by columns and death at minimum
+  #' @param group.by. vector of column names to be grouped by 
+  #' @param trtyrs. vector of treatment years designated
+  #' @param dates.2021. (optional) range of dates of 2021, if it is incomplete
+  #' 
+  #' @return a dataframe summarising yearly counts and changes of visits by death and group.by variables
   
   stata = df
   
@@ -608,10 +447,13 @@ compare_yearly = function(df, group.by = c("cond"), trtyrs = c(2020,2021), dates
 }
 
 compare_waves = function(df, date.df, group.by = c("cond")){
-  #' Import and append features to the original records stata file
+  #' YoY comparison of attendance in individual COVID wave
   #'    
-  #' @param df. Dataframe. dataframe with cond, eventdate, death 
-  #' @param date.df. Dataframe. dataframe with wave_num and eventdate columns
+  #' @param df. Dataframe. dataframe with group.by columns and eventdate 
+  #' @param date.df. Dataframe. dataframe with wave_num and eventdate, i.e. start and end dates of waves, columns
+  #' @param group.by. Vector of Strings. vector of column names to be grouped by 
+  #' 
+  #' @return a dataframe summarising by-wave counts and changes of visits by death and group.by variables
   
   selected = df
   # produce daily table

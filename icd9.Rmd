@@ -1,0 +1,46 @@
+---
+title: "2SLS by age and gender"
+output: pdf_document
+---
+
+# import libraries
+
+```{r}
+library(tidyverse)
+library(haven)
+library(icd)
+```
+
+# read data
+
+```{r}
+dta = read_dta(file.path('/Users/ytf1997/Desktop/AnE_data/csv', "2019_2020_all_20210312.dta"))
+dta = head(dta, 1000)
+# get only DR/diagnosis cols
+dta.icd9 = dta %>% select(AENumber, matches("^DR[1-9]"))
+colnames(dta.icd9)
+dta.icd9 %>% View()
+
+```
+
+# find unique icd9 codes per patient, transform from wide to long format
+
+```{r}
+dta.icd9 = dta.icd9 %>% 
+  pivot_longer(cols = -AENumber, names_to = "diagnosis", values_to = "icd9") %>% 
+  group_by(AENumber) %>% 
+  distinct(icd9,.keep_all=T) %>% 
+  ungroup() %>% 
+  mutate(icd9 = ifelse(icd9== "", NA, icd9)) %>% 
+  drop_na()
+```
+
+# use icd package to categorise comorbidities
+
+```{r}
+# count by icd9 charlson's comorbidities
+icd::comorbid_charlson(dta.icd9) %>% 
+  as.data.frame() %>%
+  summarise_all(sum)
+```
+

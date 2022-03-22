@@ -1,0 +1,83 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+# visit tracing (optional)
+ReferenceKeyWhitelist1 = stata %>% 
+  filter(age >= 65, if_any(DR1:DR10,~grepl("E95",.)), eventdate >= "2020-07-01", eventdate < "2021-07-01") %>%
+  select(ReferenceKey, DateofRegisteredDeath, eventdate, old_home) %>%
+  group_by(ReferenceKey) %>%
+  arrange(eventdate) %>%
+  summarise(DateofRegisteredDeath = last(DateofRegisteredDeath),
+            old_home = last(old_home),
+            .groups="drop") 
+
+stata %>% 
+  filter(age >= 65, if_any(DR1:DR10,~grepl("E95",.))) %>% 
+  count(year, death) %>%
+  filter(death == 1)
+
+df = stata %>% 
+  filter() %>%
+  select(AENumber, year, age, paste0("DR", 1:10)) 
+
+df_imputed = df %>% 
+  # head() %>%
+  mutate(
+    # "f001_139" = ifelse(if_any(DR1:DR10,~between(.,'001', '139')), 1, 0),
+    # "f140_239" = ifelse(if_any(DR1:DR10,~between(.,'140', '239')), 1, 0),
+    # "f240_279" = ifelse(if_any(DR1:DR10,~between(.,'240', '279')), 1, 0),
+    # "f280_289" = ifelse(if_any(DR1:DR10,~between(.,'280', '289')), 1, 0),
+    # "f290_319" = ifelse(if_any(DR1:DR10,~between(.,'290', '319')), 1, 0),
+    # "f300" = ifelse(if_any(DR1:DR10, ~grepl('300', .)), 1, 0),
+    "f626" = ifelse(if_any(DR1:DR10, ~grepl('626', .)), 1, 0),
+    # "f311" = ifelse(if_any(DR1:DR10, ~grepl('311', .)), 1, 0),
+    # "depression" = ifelse(if_any(DR1:DR10, ~grepl('311', .)), 1, 0)
+    # "f320_389" = ifelse(if_any(DR1:DR10,~between(.,'320', '389')), 1, 0),
+    # "f390_459" = ifelse(if_any(DR1:DR10,~between(.,'390', '459')), 1, 0),
+    # "f460_519" = ifelse(if_any(DR1:DR10,~between(.,'460', '519')), 1, 0),
+    # "f520_579" = ifelse(if_any(DR1:DR10,~between(.,'520', '579')), 1, 0),
+    # "f580_629" = ifelse(if_any(DR1:DR10,~between(.,'580', '629')), 1, 0),
+    # "f630_679" = ifelse(if_any(DR1:DR10,~between(.,'630', '679')), 1, 0),
+    # "f680_709" = ifelse(if_any(DR1:DR10,~between(.,'680', '709')), 1, 0),
+    # "f710_739" = ifelse(if_any(DR1:DR10,~between(.,'710', '739')), 1, 0),
+    # "f740_759" = ifelse(if_any(DR1:DR10,~between(.,'740', '759')), 1, 0),
+    # "f760_779" = ifelse(if_any(DR1:DR10,~between(.,'760', '779')), 1, 0),
+    # "f780_799" = ifelse(if_any(DR1:DR10,~between(.,'780', '799')), 1, 0),
+    # "f800_999" = ifelse(if_any(DR1:DR10,~between(.,'800', '999')), 1, 0),
+    # "V01_V91" = ifelse(if_any(DR1:DR10,~grepl("V",.)), 1, 0),
+    # "E000_E999" = ifelse(if_any(DR1:DR10,~grepl("E",.)), 1, 0),
+    # "E950_E959" = ifelse(if_any(DR1:DR10,~grepl("E95",.)), 1, 0),
+    # NoCode = ifelse(if_any(DR1:DR10, ~!is.na(.)), 0, 1)
+  ) %>%
+  select(-paste0("DR", 1:10))
+
+cols = df_imputed %>% 
+  select(-AENumber, -year, -age) %>%
+  colnames() 
+df_counts = as_tibble(c())
+for(col in cols){
+  df_counts = rbind(df_counts,
+  df_imputed %>%
+    count(eval(parse(text = paste0(col,'==1'))), year) %>%
+    filter_at(1, ~. == T) %>%
+    mutate(group = col) %>%
+    select_at(-1)
+  )
+}
+df_counts = df_counts %>%
+  pivot_wider(
+    names_from = year,
+    values_from = n
+  )
+df_counts
+```
+
+
+```{r}
+writexl::write_xlsx(df_counts, path = here("65plus_suicide_byyr.xlsx"))
+
+```
+

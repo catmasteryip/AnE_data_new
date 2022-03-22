@@ -1,0 +1,39 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+# filter renal
+AElist = comorbidities_quan_deyo %>% 
+  filter(Mets == 1) %>% 
+  select(AENumber)
+df = left_join(AElist, select(stata, AENumber, DateofRegisteredDeath, death, eventdate, age, ReferenceKey), by = "AENumber")
+ReferenceKeyWhitelist1 = df %>% filter(age >=65,
+                                       death == 1,
+                                       eventdate >= "2018-07-01", 
+                                       eventdate < "2019-07-01") %>%
+  select(ReferenceKey)
+ReferenceKeyWhitelist2 = df %>% filter(age >=65,
+                                       death == 1,
+                                       eventdate >= "2020-07-01", 
+                                       eventdate < "2021-07-01") %>%
+  select(ReferenceKey)
+
+df.covid = trace_visits(ReferenceKeyWhitelist2, minnoncovidvisits = 2)
+df.covid %>% count(change)
+
+df.precovid = trace_visits(ReferenceKeyWhitelist1,
+                           startctrldate = "2017-01-01",
+                           endtrtdate = "2018-07-01",
+                           starttrtdate = "2018-01-01",
+                           enddate = "2019-07-01",
+                           minnoncovidvisits = 2)
+df.precovid %>% count(change)
+
+df = rbind(df.covid %>% mutate(period = "covid"),
+                df.precovid%>% mutate(period = "precovid")) 
+table(df$period, df$change)
+chisq.test(df$period,  
+           df$change) 
+```

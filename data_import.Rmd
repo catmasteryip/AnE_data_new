@@ -34,10 +34,10 @@ pre_process = function(xlsx_dir){
 }
 ```
 
-# pre-process 2015-2021 data
+# pre-process data
 
 ```{r}
-xlsx_dir = paste0(sub("/[^/]+$", "", here()),"/data/2021/")
+xlsx_dir = paste0(sub("/[^/]+$", "", here()),"/data/2022/")
 # df_csv = pre_process(xlsx_dir)
 
 # parallelized version
@@ -48,7 +48,7 @@ df_csv %>% View()
 # save raw data as csv
 
 ```{r}
-filename = here("AE_Attendance_20210918_20211231.csv")
+filename = here("AE_Attendance_20220101_20220304.csv")
 write_csv_wrapped = function(arg){
   df = arg[[1]]
   destination = arg[[2]]
@@ -129,7 +129,8 @@ df2 = df_csv %>% select(selected_col) %>%
 # save transformed data as csv
 
 ```{r}
-filename = here("AE_Attendance_transformed_20210918_20211231.csv")
+filename = here("AE_Attendance_transformed_20220101_20220304.csv")
 arg = list(list(df2,filename))
 mclapply(arg, write_csv_wrapped, mc.cores=40)
 ```
+

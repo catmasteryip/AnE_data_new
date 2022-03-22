@@ -3,6 +3,14 @@ title: "R Notebook"
 output: html_notebook
 ---
 
+# import libraries
+
+```{r}
+library(doParallel)
+all_cores <- parallel::detectCores(logical = FALSE)
+registerDoParallel(cores = all_cores)
+```
+
 # import data
 
 ```{r}
@@ -13,7 +21,7 @@ stata = mclapply(list("AE_Attendance_transformed_20150101_20210917.csv"), import
 stata = stata %>%
   mutate(year = lubridate::year(eventdate),
          eventdate = as.Date(eventdate)) %>% 
-  filter(eventdate<max(eventdate)-28,
+  filter(eventdate<="2021-08-19",
          year != 2015)
 
 ### comorbidities

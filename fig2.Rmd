@@ -29,15 +29,6 @@ here = here::here
 # import scripts
 
 ```{r}
-# working_dir = here()
-# script_dir = here('scripts')
-# csv_dir = here('data')
-# plot_dir = here('viz/manuscript_fig_2021_included')
-# result_dir = here("results")
-# paths = c("fear_index.R","conditions_setting.R","data_import.R","import.R")
-# for( path in paths){
-#   source(here(script_dir, path))
-# }
 source("./scripts/import.R")
 source("./scripts/data_import.r")
 ```
