@@ -10,6 +10,8 @@
 !scripts/
 !data_import.Rmd
 !age_gender_count.Rmd
+!elderly_visit_b4_death.Rmd
+!supp tables.Rmd
 !chronic_b4_death.Rmd
 !manuscript_figures.Rmd
 !fig2.Rmd
