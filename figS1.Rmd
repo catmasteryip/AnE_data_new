@@ -1,0 +1,124 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+# import libraries
+library(tidyverse)
+library(lubridate) # wrangling with dates
+library(scales) # vectors and colour scaling
+library(icd) # icd codes and comorbidities
+# library(haven)
+library(import) # namespace handling
+# library(xlsx)
+library(patchwork)
+library(ggplot2)
+```
+
+# import data from fig1.Rmd
+
+# Impute filtering condition info, group by age and gender
+
+```{r}
+# age and gender filtering conditions
+demo_conditions = c("age>= 65 & Sex_num == 1","age >= 65 & Sex_num == 0")
+# age and gender filtering conditions in readable form
+demo_conditionsTextual = c("65+ & M","65+ & F")
+# concat strings in dplyr-readable form
+conditions = paste(paste0(demo_conditions,"~\"",demo_conditionsTextual,"\";"),collapse ='')
+
+selected = stata %>%
+  select(eventdate, year, age, Sex_num, death) %>%
+  mutate(cond=case_when(
+    !!! rlang::parse_exprs(conditions)
+  ))
+```
+
+# 65+ daily attn and 28d death counts 
+
+```{r}
+
+
+
+wave.df <- import_waves(twosls = T)
+date.df <- import_dates(wave.df=wave.df, 
+                        start = min(selected$eventdate), 
+                        end=max(selected$eventdate))
+
+
+# impute after-wave periods
+date.df = date.df %>%
+  mutate(wave_num = ifelse(is.na(wave_num) & date>min(wave.df$start),"after-wave",wave_num))%>%
+  mutate(wave_num = ifelse(date<min(wave.df$start),0,wave_num))
+
+daily = selected %>% 
+  group_by(cond) %>% 
+  count(eventdate, death) %>%
+  pivot_wider(names_from = "death", names_prefix = "n_d", values_from="n") %>%
+  mutate(attn=n_d0+n_d1) %>%
+  rename(death=n_d1) %>%
+  select(-n_d0) %>%
+  drop_na() %>%
+  # mutate year and t, number of calendar days since 1st Jan
+  mutate(Year = year(eventdate) - 2016,
+         t=yday(eventdate)) %>% 
+  merge(x=., y=date.df, by.x="eventdate", by.y="date")
+
+model.stage1 = glm(attn~wave_num + Year + t + I(t^2) + I(t^3),daily,family="gaussian")
+daily = daily %>%
+  mutate(estimated.attn = predict(model.stage1, daily))
+olddaily = daily
+daily = bind_rows(olddaily %>%
+            filter(year >= 2020) %>%
+              mutate(year = as.factor(year)),
+          olddaily %>%
+            filter(year < 2020) %>%
+            mutate(year="2016-2019 avg") %>%
+            group_by(yday, cond) %>%
+            mutate(estimated.attn = mean(estimated.attn)))
+daily
+  # group_by(wave_num, yday) %>%
+  # summarise(estimated.attn = mean(estimated.attn))
+# attn plot
+fig3a = (
+  daily  %>% filter(yday != 366) %>%
+  ggplot() +
+  geom_point(aes(x=yday(eventdate), y=attn, col = as.factor(year)), alpha=.1) +
+  geom_line(aes(x=yday(eventdate), y=estimated.attn, col = as.factor(year))) +
+  facet_wrap(~cond) +
+  labs(x = "Calendar Day",
+       y="Attendance Episode",
+       col = "Year") +
+  theme(legend.position = "bottom")
+)
+
+model.stage2 = glm(death~estimated.attn + Year + t + I(t^2) + I(t^3),olddaily,family="gaussian")
+olddaily = olddaily %>%
+  mutate(estimated.death = predict(model.stage2, daily))
+daily = bind_rows(olddaily %>%
+            filter(year >= 2020) %>%
+              mutate(year = as.factor(year)),
+          olddaily %>%
+            filter(year < 2020) %>%
+            mutate(year="2016-2019 avg") %>%
+            group_by(yday, cond) %>%
+            mutate(estimated.death = mean(estimated.death)))
+daily
+# death plot
+fig3b = ggplot(daily %>% filter(yday != 366) ) +
+  geom_point(aes(x=yday(eventdate), y=death, col = as.factor(year)), alpha=.1) +
+  geom_line(aes(x=yday(eventdate), y=estimated.death, col = as.factor(year))) +
+  facet_wrap(~cond) +
+  labs(y="28d Mortality", col = "Year") +
+  theme(legend.position="bottom") +
+  ylim(20,70)
+
+fig3 = fig3a / fig3b & labs(x="Calendar Day") &
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_blank(), axis.line = element_line(colour = "black")) &
+  plot_annotation(tag_levels = list(c("A", "B")))
+fig3
+ggsave(fig3, filename = file.path(out_dir, "figS1.svg"),height=7)
+```
+

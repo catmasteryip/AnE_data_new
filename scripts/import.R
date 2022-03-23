@@ -72,6 +72,8 @@ extract_HK_counts_from_JohnHopkins_cumulative_counts <- function(df) {
 # ///// Importing conditions defined by team --------------------------------------------
 
 import_condf <- function() {
+  #' Deprecated as of 23th Mar 2022
+  #' 
         con.df <- tribble(
                 # num = pri_dis coding
                 # conS = condition name, short
@@ -194,8 +196,9 @@ import_waves <- function(day.lag = 0, twosls=F) {
         return(wave.df)
 }
 
-# deprecated
+
 import_wavedates2021 = function(df.lastday, out_of_wave = 'non-wave'){
+  #' Deprecated as of 23th Mar 2022
   #' A function to impute wave dates of 2021
   #' 
   #' @param df.lastday. 
@@ -266,7 +269,9 @@ convert_to_facet_label <- function(var) {
 
 
 import_waves3 <- function(day.lag = 0) {
-        #' A function to import the COVID waves in Hong Kong.
+        #' Deprecated
+        #' 
+        #'  A function to import the COVID waves in Hong Kong.
         #' Called by import_calendar
         
         waves <- tribble(
@@ -306,6 +311,7 @@ import_waves3 <- function(day.lag = 0) {
 
 
 import_waves2 <- function(day.lag = 0) {
+        #' Deprecated
         #' A function to import the COVID waves in Hong Kong.
         
         waves <- tribble(

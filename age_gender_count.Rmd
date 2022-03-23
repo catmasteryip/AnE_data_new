@@ -41,22 +41,7 @@ for( path in paths){
 }
 ```
 
-# import dataset and subsetting
-
-```{r}
-# get dataset
-original <- import_stata(dir=csv_dir, up_to="2021")
-
-# name changing
-original =  original %>% 
-  rename(age=AdmissionAgeYearepisodeba) 
-
-# select columns
-selected_columns = c('eventdate',"DateofRegisteredDeath","age","Sex_num","death","censor","old_home")
-
-# subset dataset
-selected = original %>% select(selected_columns)
-```
+# import dataset and subsetting from manuscript_figures.Rmd
 
 # Impute filtering condition info, group by age and gender
 
@@ -79,7 +64,8 @@ demo_conditionsTextual = c("65+ & M","65+ & F",
 # concat strings in dplyr-readable form
 conditions = paste(paste0(demo_conditions,"~\"",demo_conditionsTextual,"\";"),collapse ='')
 
-selected = selected %>% 
+selected = stata %>% 
+  select(c('eventdate',"DateofRegisteredDeath","age","Sex_num","death","old_home")) %>%
   mutate(cond=case_when(
     !!! rlang::parse_exprs(conditions)
   ))

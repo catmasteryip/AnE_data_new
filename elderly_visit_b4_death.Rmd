@@ -110,8 +110,8 @@ chisq.test(df[df$old_home=="N",]$period,
 chisq.test(df[df$old_home=="Y",]$period,
            df[df$old_home == "Y",]$change)
 
-table(df$period,
-           df$change)
+table(df$change,
+      df$period)
 
 chisq.test(df$period,
            df$change)

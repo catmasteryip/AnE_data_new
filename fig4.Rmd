@@ -1,159 +1,248 @@
 ---
-title: "65+ RCHE attn reduction and DOA/DBA bar chart"
-output: pdf
+title: "comorbidity plots"
+output: html_notebook
 ---
 
 # import libraries
 
 ```{r}
-# library(haven) 
-library(lubridate)
-library(here)
-# library(xlsx)
-library(dplyr)
-library(tidyr)
-library(ggplot2)
-library(stringr)
-library(RColorBrewer)
-library(ivreg)
-library(generics)
-library(patchwork)
-
-# prevent masking
-rename = dplyr::rename
-select = dplyr::select
-summarise = dplyr::summarise
-filter = dplyr::filter
+library(doParallel)
+all_cores <- parallel::detectCores(logical = FALSE)
+registerDoParallel(cores = all_cores)
 ```
 
-# import scripts
+# import data from fig1.Rmd
 
 ```{r}
+source("./scripts/icd.R")
 
-working_dir = here()
-script_dir = here('scripts')
-csv_dir = here('data')
-plot_dir = here('plots')
-paths = c("fear_index.R","conditions_setting.R","data_import.R","import.R")
-for( path in paths){
-  source(here(script_dir, path))
+comorbidities_quan_deyo <- stata %>% 
+          select(AENumber, ReferenceKey, death, paste0("DR", 1:10)) %>%
+          get_dx_comorbidities(icd9map = icd::icd9_map_quan_deyo)
+```
+
+
+# fig 5 
+
+```{r}
+# get wave 5 aka 2021 wave 4 dates
+wave.dates <- import_waves() %>% 
+  filter(year == 2021) %>%
+  import_dates() %>%
+  filter(wave_num %in% c(5),
+         year==2021) %>%
+  mutate(date = yday(date)) %>%
+  pull(date)
+
+# # set filters in strings
+# title.filter <- tribble(
+#         ~ title,
+#         ~ filter,
+#         "Wave periods; 65+",
+#         "eventdate %in% wave.dates & age >= 65",
+#         "Non-wave periods; 65+",
+#         "!eventdate %in% wave.dates & age >= 65"
+# )
+
+df <- stata %>% 
+  # drop DOA and filter 65+ only
+        filter(doadba != 1,
+               age>=65) %>%
+  mutate(demographic = ifelse(yday(eventdate) %in% wave.dates, "2021 Wave", "2021 Non-wave")) 
+### Tabulate changes routine for each filtered dataframe
+
+tabulate_changes <- function(df, comorbidity = NULL, conditions_to_add = NULL, group.by = c("demographic")) {
+  #' tabulate 2020 vs 2016-2019 changes of comorbidity attendance and deaths (2021 vs 2016-2019 to be added)
+  #' 
+  #'
+  #' @param df The original dataframe
+  #' @param comorbidity A dataframe that contains icd9 comorbidities
+  #' @param conditions_to_add additional icd9 categories to add
+  #' @return dataframe of changes of all icd9 categories
+        
+          if (is.null(conditions_to_add)) conditions_to_add <- c()
+          
+          # input args:
+          # df <- stata %>% 
+          #     # drop DOA and filter 65+ only
+          #           filter(doadba != 1,
+          #                  age>=65,
+          #                  year < 2021) %>%
+          #     mutate(demographic = ifelse(yday(eventdate) %in% wave.dates, "2020 Wave", "2020 Non-wave"))
+          # comorbidity = comorbidities_quan_deyo
+          # conditions_to_add = c()
+          
+          # original set of conditions
+          con.names.orig <- names(icd::icd9_map_quan_deyo)
+          con.names.orig = con.names.orig[!(con.names.orig %in% "HIV")]
+          # set of all conditions
+          con.names.all <- c(con.names.orig, conditions_to_add, "NoneMapped")
+          # set of other conditions
+          con.names.others <- con.names.all[str_detect(con.names.all, "NoneMapped", negate = T)]
+          
+          AE_whitelist <- pull(df, AENumber)
+          
+          # icd_conditions = comorbidity %>% select(-AENumber) %>% colnames()
+                
+          comorb.filtered <- comorbidity %>% 
+                  # select AENumber and comorbidity columns only 
+                  # (to ensure reproducibility)
+                  select(AENumber, all_of(con.names.orig)) %>% 
+                  # filter AENumber from user-supplied dataframe (for subsetting)
+                  filter(AENumber %in% AE_whitelist) %>% 
+                  # add back pneumonia and death information
+                  left_join(df %>% select(AENumber, year, death, all_of(conditions_to_add), eventdate, !!!syms(group.by)),
+                            by = "AENumber") %>%
+                  mutate(year = as.character(year)) %>%
+                  # compute NoneMapped
+                  mutate(NoneMapped = (rowSums(across(all_of(con.names.others))) == 0),
+                         yday = yday(eventdate))
+          # browser()
+         
+          # yearly comparison with non-covid yrs
+          # loop over icd conditions
+          out.changes = c()
+          
+          for(icd_cond in con.names.others){
+            # browser()
+            print(paste0("calculating changes of icd category: ", icd_cond))
+            # change
+            results <- compare_yearly(comorb.filtered, 
+                                      group.by = c(group.by, icd_cond), 
+                                      trtyrs = c(2021))
+            out.changes.placeholder = results[[2]] %>% 
+              filter(!!!syms(icd_cond)) %>% 
+              mutate(condition = icd_cond) %>%
+              select(-one_of(icd_cond)) 
+            # browser()
+            out.changes = bind_rows(out.changes, out.changes.placeholder)
+          }
+          
+          return(out.changes)
+        
 }
+
+
+annotation.df <- tribble(
+        ~label, ~condition,
+        "MI","MI",
+        "CHF","CHF",
+        "PVD","PVD",
+        "Stroke","Stroke",
+        "Dementia","Dementia",
+        "Chronic pulm. disease","Pulmonary",
+        "Rheumatic disease","Rheumatic",
+        "PUD","PUD",
+        "Mild liver disease","LiverMild",
+        "DM w/o chronic complications","DM",
+        "DM w/ chronic complications","DMcx",
+        "Hemiplegia/paraplegia","Paralysis",
+        "Renal disease","Renal",
+        "Cancer","Cancer",
+        "Moderate/severe liver disease","LiverSevere",
+        "Metastatic solid tumour","Mets",
+        "AIDS/HIV","HIV",
+        "Missing code","NoCode",
+        "Others","NoneMapped",
+        "death","death",
+        # "Pneumonia","pneu",
+        "Sepsis","diag"
+)
+
+results = tabulate_changes(df, comorbidities_quan_deyo, group.by = c("demographic"))
+tableDeyo = results %>%
+  filter(ctrltrt == "ctrl")
+
 ```
 
-# import dataset and subsetting
+
 
 ```{r}
-# get dataset
-stata = mclapply(list("AE_Attendance_transformed_20150101_20210917.csv"), import_csv, mc.cores=40)
-stata = stata[[1]]
+### Plotting
 
-# select columns
-selected_columns = c('eventdate',"DateofRegisteredDeath","age","Sex_num","death","old_home","doadba")
+size_breaks = c(50,100,500,1000,5000)
+deaths_per_year = 10
+ncol = 2
+text_size = 1.75
 
-# subset dataset
-selected = stata %>% 
-  select(selected_columns) %>%
-  mutate(old_home = ifelse(old_home == "Y", 1, 0))
-  # # (optional) discard last 28-day data 
-  # filter(eventdate<max(eventdate)-28)
+group.by = c("demographic")
+plotready = tableDeyo %>%
+    filter(abs(n) > deaths_per_year) %>%
+    group_by(year, condition, !!!syms(group.by)) %>%
+    mutate(x = percent_diff[death==-1]) %>%
+    filter(death == 1) %>%
+    select(-death, -ctrltrt) %>%
+    rename(y = percent_diff,
+           diff_1 = abs_diff) %>%
+  # textual label for plotting
+    mutate(label = paste0(condition, " (", sprintf("%+d", diff_1), ")"))
 
-selected = selected %>% 
-  mutate(eventdate = as.Date(eventdate)) 
-```
+xlim <- c(min(plotready$x), max(plotready$x))
+ylim <- c(min(plotready$y), max(plotready$y))
 
-# Impute filtering condition info, group by 65+ RCHE status
+fig5.raw <- (
+  plotready %>% 
+               ### Plotting
+               ggplot(aes(x = x, y = y, col = diff_1, label = `label`)) +
+               ### reference lines
+               geom_hline(yintercept = 0, col = "lightgrey") +
+               geom_vline(xintercept = 0, col = "lightgrey") +
+               geom_abline(intercept = 0, slope = 1, col = "steelblue") +
+               ### datapoints
+               geom_point(aes(size = n), alpha = 0.3) +
+               geom_text_repel(size = text_size, force = 10, max.overlaps = 20) +
+               ### annotations
+               labs(
+                       x = "Episode Admission Seasonally-Adjusted Change (%)",
+                       y = "28-day All-Cause Mortality\nSeasonally-Adjusted Change (%)",
+                       size = "Deaths"
+               ) +
+               ### colours 
+               scale_colour_gradient2(low = "blue", mid = "dark grey", high = "red",
+                                        limits = c(-100, 100),
+                                        oob = scales::squish,
+                                        name = "Year-on-year\ndifference\nin deaths")+ 
+               ### point size
+               scale_size_continuous(breaks = size_breaks)+ 
+               ### facets
+               facet_wrap(~demographic, ncol = ncol,
+                            scales = "free", drop = FALSE
+                            # here scales is set to "free" to show the axis in each facet
+                            # as long as limits are provided, then ok
+               ) +
+               ### scales
+               scale_x_continuous(limits = xlim,
+                                    expand = expansion(mult = c(0.05, 0.05))
+               ) + 
+               scale_y_continuous(limits = ylim,
+                                    expand = expansion(mult = c(0.05, 0.05))
+               )+ 
+               ## themes 
+               theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+                       panel.background = element_blank(), axis.line = element_line(colour = "black")) + 
+               theme(legend.position = "bottom")
+        )
 
-```{r}
-# age and gender filtering conditions 
-elderly_conditions = c("age>= 65 & old_home == 1","age >= 65 & old_home == 0")
-# age and gender filtering conditions in readable form
-elderly_conditionsTextual = c("65+ RCHE","65+ non-RCHE")
-# concat strings in dplyr-readable form
-elderly_cond = paste(paste0(elderly_conditions,"~\"",elderly_conditionsTextual,"\";"),collapse ='')
-
-selected.elderly = selected %>% 
-  mutate(cond=case_when(
-    !!! rlang::parse_exprs(elderly_cond)
-  ))
-```
-
-# Tallying, turn data into daily attn counts
-
-```{r}
-
-# merge with wave settings
-wave.df <- import_waves(twosls = T)
-date.df <- import_dates(wave.df=wave.df, end=max(ymd(selected$eventdate))) 
-# impute 2021 after-wave periods
-date.df = date.df %>%
-  mutate(wave_num = ifelse(is.na(wave_num) & date>min(wave.df$start),"after-wave",wave_num))%>%
-  mutate(wave_num = ifelse(date<min(wave.df$start),0,wave_num))
-
-attn.reduction.elderly = compare_waves(selected.elderly, date.df) %>%
-  filter(!is.na(wave_num))
-```
-
-# ggplot attn reduction
-
-```{r}
-fig4a =
-  ggplot() +
-  geom_line(data=attn.reduction.elderly %>% 
-              filter(cond=="65+ RCHE",!wave_num %in% c("after-wave","0")),
-            aes(x=wave_num,y=percent_diff,group=1,col=cond)) +
-  geom_line(data=attn.reduction.elderly %>% 
-              filter(cond=="65+ non-RCHE",!wave_num %in% c("after-wave","0")),
-            aes(x=wave_num,y=percent_diff,group=1,col=cond)) +
-  geom_hline(data=attn.reduction.elderly %>% 
-               filter(cond=="65+ RCHE",wave_num=="after-wave"),
-             aes(yintercept=percent_diff,col=cond),linetype="dashed") +
-  geom_hline(data=attn.reduction.elderly %>% 
-               filter(cond=="65+ non-RCHE",wave_num=="after-wave"),
-             aes(yintercept=percent_diff,group=1,col=cond),linetype="dashed") +
-  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
-        panel.background = element_blank(), axis.line = element_line(colour = "black")) +
-  labs(x="Wave Period",y="Seasonally Adjusted Attendance Change %",col="") +
-  theme(legend.position = "bottom") +
-  geom_hline(yintercept = 0) +
-  scale_color_brewer(palette = "Set2") 
-fig4a
-# write.csv(attn.reduction, file = here("results","65plus RCHE wave attn.csv"))
-```
-
-# ggplot of 65+ RCHE death
-
-```{r}
-results = compare_yearly(selected.elderly %>%
-                              mutate(year = year(eventdate)) %>%
-                              filter(!is.na(cond)),
-                              group.by = c("doadba", "cond"))
-
-diff.yearly.elderly = results[[2]] %>%
-  filter(death==1,
-         ctrltrt == "ctrl") %>%
-  mutate(doadba = ifelse(doadba==1, "DOA/DBA", "non-DOA/DBA"),
-         RCHE = cond,
-         cond = paste(RCHE, doadba, sep = "\n"))
+fig5.raw
+        
+# aesthetics / themes
+fig5 <- ( fig5.raw
+  + guides(shape = guide_legend(override.aes = list(size = 6), order = 1))
   
-fig4b = ggplot(diff.yearly.elderly) +
-  geom_col(aes(x=cond, y=abs_diff, fill=RCHE)) +
-  geom_text(aes(x=cond, y=abs_diff, label=paste0(percent_diff,"%")),
-            position=position_dodge(width=0.9),
-            hjust = -0.1,
-            size=4) +
-  ylim(0,1500)+
-  scale_fill_brewer(palette = "Set2") +
-  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
-        panel.background = element_blank(), axis.line = element_line(colour = "black")) +
-  labs(x="",y="65+ ED 28d Mortality\nSeasonally Adjusted Change") +
-  theme(legend.position = "") +
-  coord_flip() +
-  facet_wrap(~year, nrow=2)
+  + theme(text = element_text(size = 8),
+          legend.title = element_text(size = 6), 
+        legend.text = element_text(size = 6),
+        legend.position = "bottom",
+                    
+  )
+  + facet_wrap(~demographic, ncol = 2, scales = "free", drop = T) 
+  
+)
 
-fig4b
+fig5 
+ggsave(plot=fig5, file=file.path(out_dir, "figS3.svg"), height = 4, width = 8.3 - 0.75*2)
 
-fig4 = fig4a + fig4b + patchwork::plot_annotation(tag_levels = list(c("A", "B")))
-fig4
-ggsave(plot=fig4, file=file.path(out_dir,"fig4_raw.svg"),width=10,height=5)
-write_xlsx(diff.yearly.elderly, here("results","YoY change in 65plus RCHE DOADBA.xlsx"))
+# invisible(dev.off())
+# gc()
 ```
+

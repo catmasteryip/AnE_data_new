@@ -29,8 +29,6 @@ library(parallel)
 source("./scripts/import.R")
 source("./scripts/data_import.r")
 source("./scripts/icd.R")
-# source("./scripts/eda.R") # import the compare_19vs20 routine
-# source("./scripts/import.R")
 
 # set input/output directory
 data_dir <- "./data"
@@ -38,9 +36,10 @@ out_dir <- "./viz/manuscript_fig_2021_fullyr"
 if (!dir.exists(out_dir)) dir.create(out_dir)
 ```
 
-# import
+# import data
+
 ```{r}
-### attendance records from stata file
+### attendance records from csv file
 stata = c()
 for (filename in c("../data/AE_Attendance_transformed_20150101_20210917.csv",
                   "../data/AE_Attendance_transformed_20210918_20211231.csv",
@@ -59,26 +58,6 @@ stata = stata %>%
          year != 2015,
          year != 2022) %>% 
   distinct()
-
-### comorbidities
-
-----------# change it back to original version
-
-# comorbidities_quan_deyo <- stata %>%
-#   # optional here
-#           filter(year(eventdate) > 2015, Sex_num == 0) %>%
-#           select(eventdate, AENumber, ReferenceKey, death, paste0("DR", 1:10)) 
-#           # mutate(NoneMapped = (rowSums(across(-c(AENumber, death, NoCode))) == 0 & !NoCode))
-# comorbidities_quan_deyo2 = comorbidities_quan_deyo %>% 
-#     pivot_longer(cols = paste0("DR", 1:10), names_to = "DR", values_to = "icd") %>%
-#     select(-DR) %>%
-#     group_by(eventdate, AENumber) %>%
-#     distinct(icd) 
-# comorbidities_quan_deyo2 %>%
-#     filter(grepl("626", icd, fixed = T)) %>%
-#   ungroup() %>%
-#     count(year = year(eventdate))
-
     
 ```
 

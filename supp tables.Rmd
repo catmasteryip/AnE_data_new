@@ -29,20 +29,8 @@ results_dir <- "./results"
 if (!dir.exists(results_dir)) dir.create(results_dir)
 ```
 
-# import
-```{r}
-### attendance records from stata file
-stata = mclapply(list("AE_Attendance_transformed_20150101_20210917.csv"), import_csv, mc.cores=40)
+# import data from fig1.Rmd
 
-stata = stata %>%
-  mutate(year = lubridate::year(eventdate),
-         eventdate = as.Date(eventdate)) %>% 
-  filter(eventdate<max(eventdate)-28,
-         year != 2015)
-
-```
-
-# age and gender yearly attendance
 
 ```{r}
 # age and gender filtering conditions 
@@ -67,7 +55,10 @@ df = stata %>%
   mutate(cond=case_when(
     !!! rlang::parse_exprs(conditions)
   ))
+```
 
+# age and gender yearly attendance
+```{r}
 results = compare_yearly(df) 
 
 age_gender_attn = results[[2]] %>% 
@@ -105,7 +96,7 @@ age_gender_attn_wave = results %>%
   filter(!is.na(wave_num)) %>%
   select(-attn.y)
 age_gender_attn_wave
-write_xlsx(age_gender_attn_wave, path = file.path(results_dir,"age_gender_wave_attn.xlsx"))
+write_xlsx(age_gender_attn_wave, path = file.path("./results/age_gender_wave_attn.xlsx"))
 ```
 
 # 65+ RCHE/non-RCHE Wave/non-wave attendance
@@ -131,8 +122,8 @@ results
 rche_attn_wave = results %>% 
   filter(!is.na(wave_num) | wave_num != 0) %>%
   select(-attn.y)
-rche_attn_wave 
-write_xlsx(rche_attn_wave, path = file.path(results_dir,"rche_attn_wave.xlsx"))
+rche_attn_wave %>% View()
+write_xlsx(rche_attn_wave, path = file.path("./results/rche_attn_wave.xlsx"))
 ```
 
 
@@ -172,7 +163,7 @@ write_xlsx(wave_elderly_df, path = "./results/wave_elderly_doadba_21.xlsx")
 df = stata %>%
   filter(age >= 65) %>%
   select(old_home, year, eventdate, death, doadba) 
-results = compare_yearly(df, group.by = c("doadba", "old_home"), dates.2021 = dates.2021)
+results = compare_yearly(df, group.by = c("doadba", "old_home"))
 rche_df = results [[2]] %>% 
   filter(ctrltrt == "ctrl",
          death==1) %>%

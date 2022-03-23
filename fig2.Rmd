@@ -33,28 +33,7 @@ source("./scripts/import.R")
 source("./scripts/data_import.r")
 ```
 
-# import dataset and subsetting
-
-```{r}
-# get dataset
-# stata = mclapply(list("AE_Attendance_transformed_20150101_20210917.csv"), import_csv, mc.cores=40)
-# stata = stata[[1]]
-
-# select columns
-selected_columns = c('eventdate',"DateofRegisteredDeath","age","Sex_num","death","old_home")
-
-# subset dataset
-selected = stata %>% 
-  select(selected_columns) 
-
-selected = selected %>% 
-  mutate(eventdate = as.Date(eventdate)) %>%
-  filter(year(eventdate)!=2015) 
-  # # (optional) discard last 28-day data 
-  # %>% filter(eventdate<max(eventdate)-28)
-
-max(selected$eventdate)
-```
+# import dataset and subsetting from fig1.Rmd
 
 # Impute filtering condition info, group by age and gender
 
@@ -76,7 +55,8 @@ demo_conditionsTextual = c("65+ & M","65+ & F",
 # concat strings in dplyr-readable form
 conditions = paste(paste0(demo_conditions,"~\"",demo_conditionsTextual,"\";"),collapse ='')
 
-selected = selected %>% 
+selected =  stata %>% 
+  select(c('eventdate',"DateofRegisteredDeath","age","Sex_num","death","old_home"))  %>% 
   mutate(cond=case_when(
     !!! rlang::parse_exprs(conditions)
   ))
