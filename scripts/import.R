@@ -353,26 +353,22 @@ import_waves2 <- function(day.lag = 0) {
 # yearly comparison of 2020, 2021 against non-covid years avg
 
 
-compare_yearly = function(df, group.by = c("cond"), trtyrs = c(2020,2021), dates.2021 = NA){
+compare_yearly = function(df, group.by = c("cond"), trtyrs = c(2020,2021), dates.incomplete = NA){
   #' Yearly comparison between each trtyrs, treatment years, against control years, the rest of the years
   #' 
   #' @param df. dataframe that contains eventdate, group.by columns and death at minimum
   #' @param group.by. vector of column names to be grouped by 
   #' @param trtyrs. vector of treatment years designated
-  #' @param dates.2021. (optional) range of dates of 2021, if it is incomplete
+  #' @param dates.incomplete (optional) range of dates of incomplete year
   #' 
   #' @return a dataframe summarising yearly counts and changes of visits by death and group.by variables
   
   stata = df
   
-  if(is.na(dates.2021)){
-    dates.2021 = stata %>% 
-      select(eventdate) %>% unique() %>% 
-      filter(year(eventdate)==2021) %>%
-      select(eventdate) %>%
-      mutate(year = year(eventdate),
-             yday = yday(eventdate)) %>%
-      pull(yday) 
+  if(is.na(dates.2021) & 2021 %in% trtyrs){
+    dates.incomplete = yday(seq(ymd('2021-01-01'),max(df$eventdate), by = '1 day'))
+  }else{
+    dates.incomplete = yday(seq(ymd('2021-01-01'),ymd('2021-12-31'), by = '1 day'))
   }
   
   # browser()
@@ -411,7 +407,7 @@ compare_yearly = function(df, group.by = c("cond"), trtyrs = c(2020,2021), dates
     # daily count data of control/non-covid years, same-period as 2021 the incomplete year
     cts.sameperiod = cts.overall %>% 
       filter(!(year %in% trtyrs),
-             yday %in% dates.2021) %>%
+             yday %in% dates.incomplete) %>%
       
       group_by(!!!syms( c("yday", "death", group.by))) %>%
       

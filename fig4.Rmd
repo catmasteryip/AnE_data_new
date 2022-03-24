@@ -22,7 +22,7 @@ comorbidities_quan_deyo <- stata %>%
 ```
 
 
-# fig 5 
+# comorbidity plots
 
 ```{r}
 # get wave 5 aka 2021 wave 4 dates
