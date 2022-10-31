@@ -8,5 +8,5 @@ Instruemntal variable analysis/2-stage least squares was implemented in fig2.Rmd
 
 ![alt text](https://github.com/catmasteryip/AnE_data_new/blob/master/pic1.svg?raw=true) <br />
 ED visit and 28-day mortality during the COVID-19 pandemic. <br />
-![alt text](https://github.com/catmasteryip/AnE_data_new/blob/master/pic1.svg?raw=true) <br />
+![alt text](https://github.com/catmasteryip/AnE_data_new/blob/master/pic2.svg?raw=true) <br />
 Reduction in ED visit and mortality across age and gender groups.
